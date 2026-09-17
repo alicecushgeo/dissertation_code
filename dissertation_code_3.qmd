@@ -1,0 +1,712 @@
+---
+title: "07.30posthovmoller"
+format: html
+editor: visual
+---
+
+## Space-time policy intervention analysis
+
+```{r}
+bird_of_prey_clean_poly <- readRDS(
+  "../data/bird_of_prey_clean_poly_0730.rds"
+)
+#plot(bird_of_prey_clean_poly$geometry) #all ready
+```
+
+```{r}
+#str(bird_of_prey_clean_poly)
+```
+
+"Can changes in spatial patterns be interpreted in the context of policy interventions that targeted persecution?"
+
+##### Vicarious Liability - Scotland - 2011 - annual national trend
+
+Wildlife and Natural Environment (Scotland) Act 2011 - introduced vicarious liability - landowners/managers could be held responsible for offences committed by employees/agents - intended to change behaviour in driven grouse shooting estates -Scotland had historically high levels of raptor persecution, particularly associated with grouse moor management. Following introduction of vicarious liability in 2011, persecution trends may have changed due to increased accountability of land managers....
+
+```{r}
+#Did raptor persecution in Scotland change after the introduction of vicarious liability in 2011?
+#names(bird_of_prey_clean_poly)
+#summary(bird_of_prey_clean_poly)
+#str(bird_of_prey_clean_poly)
+
+scotland_year <- bird_of_prey_clean_poly %>%
+  filter(Country == "Scotland") %>%
+  mutate(year = lubridate::year(date_month_year)) %>%
+  group_by(year) %>%
+  summarise(
+    birds_killed = sum(count, na.rm = TRUE),
+    incidents = n_distinct(rspb_ref)
+  )
+
+#view(scotland_year)
+
+
+ggplot(scotland_year,
+       aes(x = year, y = birds_killed)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  geom_vline(xintercept = 2011,
+             linetype = "dashed") +
+  labs(
+    x = "Year",
+    y = "Number of birds killed",
+    title = "Recorded raptor persecution in Scotland before and after vicarious liability (2011)"
+  ) +
+  theme_classic()
+#Visually, this does look like a possible policy-associated change.
+# cannot say "vicarious liability caused the decline" from this graph alone
+#Following the introduction of vicarious liability in Scotland in 2011, recorded raptor persecution declined substantially, suggesting a potential change in persecution patterns following legislative intervention.
+#BUT would this decline have happened anyway
+```
+
+```{r}
+#"Following the introduction of vicarious liability in Scotland in 2011, recorded raptor persecution declined substantially. However, because a downward trend was already apparent before implementation, further comparison with England is required to assess whether the change was greater than broader UK-wide trends."
+
+uk_year <- bird_of_prey_clean_poly %>%
+  filter(Country %in% c("Scotland", "England")) %>%
+  group_by(Country, Year) %>%
+  summarise(
+    birds_killed = sum(count, na.rm = TRUE),
+    incidents = n_distinct(rspb_ref)
+  )
+
+ggplot(uk_year,
+       aes(x = Year, y = birds_killed, colour = Country)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  geom_vline(xintercept = 2011, linetype = "dashed") +
+  labs(
+    x = "Year",
+    y = "Number of birds killed",
+    colour = "Country"
+  ) +
+  theme_classic()
+#Was the change after 2011 significantly different in Scotland compared with England?
+```
+
+```{r}
+scot_eng_year <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%   # removes polygons
+  filter(Country %in% c("Scotland", "England")) %>%
+  group_by(Country, Year) %>%
+  summarise(
+    birds_killed = sum(count, na.rm = TRUE),
+    incidents = n_distinct(rspb_ref),
+    .groups = "drop"
+  )
+
+scot_eng_year #base intervention dataset
+
+#now add treatment variable (scot), post-policy (2011), interaction variable (scot x policy)
+# expected effect is not necessarily a permanent downward trend forever. 
+# too many things happen after:2016 Hen Harrier Action Plan (England), 2018 Operation Owl (Yorkshire),COVID effects (2020–2021),changes in reporting effort, changes in RSPB monitoring
+#You might expect:Immediate behavioural response, Adaptation period, Potential return due to other pressures. So a short-term intervention analysis could ask:"Was there an immediate reduction in persecution following the introduction of vicarious liability?"For that question: Before 2007–2010 After 2011–2013 would be much more defensible to test the short-term policy impact.
+#Did Scotland experience a short-term decline relative to England following vicarious liability?
+vicarious_liability_data <- scot_eng_year %>%
+  mutate(
+    treated = ifelse(Country == "Scotland", 1, 0),
+    post_policy = ifelse(Year >= 2011 & Year <= 2013, 1, 0),
+    did = treated * post_policy
+  )
+
+vicarious_liability_data
+
+ggplot(vicarious_liability_data,
+       aes(x = Year,
+           y = birds_killed,
+           colour = Country)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  geom_vline(xintercept = 2011,
+             linetype = "dashed") +
+  labs(
+    title = "Recorded raptor persecution before and after Scottish vicarious liability",
+    x = "Year",
+    y = "Birds killed",
+    colour = "Country"
+  ) +
+  theme_classic()
+#Are Scotland and England moving similarly before 2011?
+#Does Scotland decline more after 2011?
+#Is England a reasonable comparison?
+```
+
+```{r}
+#IMPROVED DISS READY GRAPH
+ggplot(vicarious_liability_data,
+       aes(x = Year,
+           y = birds_killed,
+           colour = Country)) +
+  geom_line(linewidth = 1.5) +
+  geom_point() +
+  scale_y_continuous(
+  breaks = seq(0, 120, by = 20) #y axis values
+)+
+    annotate("rect",#rectangle to show before/after window
+           xmin = 2007,#tight window start
+           xmax = 2011,#tight window end
+           ymin = -Inf, ymax = Inf,#height of graph
+           alpha = 0.05, fill = "#FFD700") +#transparent pastel yellow
+  annotate("rect",#rectangle to show before/after window
+           xmin = 2011,#tight window start
+           xmax = 2013,#tight window end
+           ymin = -Inf, ymax = Inf,#height of graph
+           alpha = 0.1, fill = "#FFD700") +#transparent pastel yellow
+  
+  geom_vline(xintercept = 2007,#start
+             linetype = "dotted", colour = "#FFD700", linewidth = 0.7) +
+    geom_vline(xintercept = 2013,#tight end
+             linetype = "dotted", colour = "#FFD700", linewidth = 0.7) +
+  geom_vline(xintercept = 2011,#intervention
+             linetype = "dashed",#dashed line
+             linewidth = 1,#width
+             colour = "#ADC178",#colour
+             alpha = 0.6) +#transparency
+  annotate("text", #label for intervention
+         x = 2011,#date of intervention
+         y = 28,#not cluttered
+         label = "",#"Intervention",#decribe intervention
+         angle = 90,#on line
+         vjust = -0.5,#gap
+         size = 3,#font size
+         colour = "#6B7F49")+#green to match line
+  labs(
+    title = "Confirmed Raptor Illegal Killings in Scotland and England",
+    subtitle="Intervention: 2011 Vicarious Liability in Scotland",
+    x = "Year",
+    y = "Raptors Illegally Killed",
+    colour = "Country"#legend title
+  ) +
+  scale_colour_manual(
+    values = c(
+      "Scotland" = "#005EB8",
+      "England" = "#CE1124"
+    )
+  ) +
+  scale_x_continuous(
+    breaks = seq(2007, 2024, 1))+
+  theme_minimal()+
+  theme(
+  text = element_text(family = "serif", face = "bold"),
+  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+
+  panel.grid.major.y = element_line(colour = "grey90", linewidth = 0.4),
+  panel.grid.minor.y = element_blank(),
+  panel.grid.major.x = element_blank(),
+  panel.grid.minor.x = element_blank()
+)+
+  theme(
+    text = element_text(
+      family = "serif",
+      face = "bold"
+    ),
+    axis.text.x = element_text(
+      angle = 90,
+      vjust = 0.5,
+      hjust = 1
+    )
+  )
+```
+
+```{r}
+vicarious_liability_short <- vicarious_liability_data %>%
+  filter(Year <= 2013)
+
+
+ggplot(vicarious_liability_short,
+       aes(x = Year,
+           y = birds_killed,
+           colour = Country)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  geom_vline(
+    xintercept = 2011,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Short-term response following Scottish vicarious liability",
+    x = "Year",
+    y = "Individual birds killed",
+    colour = "Country"
+  ) +
+  theme_classic()
+#parallel trends test? both drop 2007-2008, both rise to 2009, england continues to rise to 2010, scotland starts to fall in 2010, and falls futher in 2011, england follows this decline. post: england rises to 2012 and 13, scotland contniues decline til 2012, starting to follow englands rise in 2013
+```
+
+```{r}
+#More formal parallel trends test
+vl_pre <- vicarious_liability_data %>%
+  filter(Year < 2011)
+
+parallel_test <- lm(
+  birds_killed ~ Year * treated,
+  data = vl_pre
+)
+
+summary(parallel_test)
+#Did Scotland have a significantly different trend before the policy?
+#p > 0.05 → no evidence trends differ :)
+#Year:treated Pr(>|t|) = 0.605
+#Scotland and England have the same pre-policy trend 
+#becuase the backwards N is not linear but this is testing linear trends, combine the formal test with the visual assessment of the graph
+#"A pre-intervention interaction model was fitted to assess whether Scotland and England had significantly different temporal trends before policy implementation. The interaction between year and treatment group was non-significant (β = -4.7, p = 0.605), providing no evidence of divergent pre-policy trends.""However, the short pre-intervention period (2007–2010) and annual fluctuations limit the power of formal trend testing."
+```
+
+```{r}
+vl_short <- vicarious_liability_data %>%
+  filter(Year <= 2013, (Country == "Scotland" | Country == "England"))
+#vl_short
+#table(vl_short$Country, vl_short$post_policy)
+```
+
+```{r}
+#THIS NB
+vl_did_nb <- glm.nb(
+  birds_killed ~ treated * post_policy,
+  data = vl_short
+)
+
+summary(vl_did_nb) ###appendix??
+#treated:post_policy -0.55900    0.17688  -3.160  0.00158 ** 
+#both models tell the same story with slightly different values
+#treated:post_policy -0.55900    0.17688  -3.160  0.00158 ** 
+#exp(-0.559) #0.5717806 (1−0.572)×100=42.8% Meaning After the introduction of vicarious liability, Scotland experienced approximately a 43% reduction in bird persecution relative to England during the 2011–2013 period.
+#A difference-in-differences approach was applied using a negative binomial regression due to the overdispersed count nature of the response variable.
+```
+
+```{r}
+###########repeat for hen harrier action plan
+model_treat <- # Model 1: Scotland vs England
+  glm.nb(birds_killed ~ treated, data = vl_short)
+
+model_post <- # Model 2: before vs after policy
+  glm.nb(birds_killed ~ post_policy, data = vl_short)
+
+model_additive <- # Model 3: treatment and post period separately
+  glm.nb(birds_killed ~ treated + post_policy, data = vl_short)
+
+model_did <- # Model 4: DiD interaction
+  glm.nb(birds_killed ~ treated * post_policy, data = vl_short)
+
+DiDtable <- modelsummary(
+  list(
+    "Treat only" = model_treat,
+    "Post only" = model_post,
+    "Treat + post" = model_additive,
+    "Treat * post" = model_did
+  ),
+  coef_map = c(
+    "(Intercept)" = "England, before",
+    "treated" = "Treat: Scotland",
+    "post_policy" = "Post period",
+    "treated:post_policy" = "DiD estimate"
+  ),
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})"
+)
+DiDtable
+```
+
+```{r}
+#did diagnostic table
+vl_did_summary <- vl_short %>%
+  group_by(Country, post_policy) %>%
+  summarise(
+    mean_birds = mean(birds_killed),
+    sd_birds = sd(birds_killed),
+    years = n()
+  )
+
+vl_did_summary
+
+# Extract means
+england_before <- vl_did_summary$mean_birds[
+  vl_did_summary$Country == "England" &
+  vl_did_summary$post_policy == 0
+]
+england_after <- vl_did_summary$mean_birds[
+  vl_did_summary$Country == "England" &
+  vl_did_summary$post_policy == 1
+]
+scotland_before <- vl_did_summary$mean_birds[
+  vl_did_summary$Country == "Scotland" &
+  vl_did_summary$post_policy == 0
+]
+scotland_after <- vl_did_summary$mean_birds[
+  vl_did_summary$Country == "Scotland" &
+  vl_did_summary$post_policy == 1
+]
+# Calculate changes
+england_change <- england_after - england_before
+scotland_change <- scotland_after - scotland_before
+# Difference-in-differences estimate
+did_estimate <- scotland_change - england_change
+
+
+# Print results
+england_change
+scotland_change
+did_estimate
+```
+
+```{r}
+#test long term is same
+long_term_nb <- glm.nb(
+  birds_killed ~ Year * treated,
+  data = uk_year %>%
+    mutate(
+      treated = ifelse(Country == "Scotland", 1, 0)
+    )
+)
+
+summary(long_term_nb)
+```
+
+\^\^\^Did legislation in Scotland reduce overall persecution compared with England?
+
+##### Hen Harrier Action Plan - species specific - England - 2016 - species trends
+
+Hen Harrier Action Plan (England): 2016 - Species-specific conservation response - Published by Defra in 2016, the plan was strictly designed to resolve the direct wildlife conflict between increasing the population of the [**hen harrier**]{.underline} and preserving the economic viability of driven [**red grouse**]{.underline} shooting on upland moors. - gwct - aimed primarily at one species (Hen Harrier), implemented in England, but intended to change behaviours on grouse moors, education, monitoring, enforcement etc. ..so before deciding on a model we first need to answer a much simpler question: Did anything visibly change after 2016?
+
+```{r}
+#lets go
+#bird_of_prey_clean_poly
+```
+
+```{r}
+#one yearly table -annual totals by country and species
+hh_year <- bird_of_prey_clean_poly %>%
+  group_by(Country, Year, species) %>%
+  summarise(
+    birds_killed = sum(count),
+    incidents = n_distinct(rspb_ref),
+    .groups = "drop"
+  )
+#how many hen harriers in each year
+hen_harrier <- hh_year %>%
+  filter(species == "Hen Harrier")
+view(hen_harrier)
+#where are hen harriers actually being killed?
+hen_harrier %>%
+  group_by(Country) %>%
+  summarise(total = sum(birds_killed))
+#40 hen harriers in england isn't huge, but over 18 years it's enough to explore.
+```
+
+```{r}
+#The Action Plan was written because Hen Harriers were being persecuted. So the logical evaluation becomes:
+####Did persecution of Hen Harriers change differently from persecution of other raptor species after 2016?
+#Did England's Hen Harrier Action Plan reduce persecution of its target species relative to other raptors?
+```
+
+```{r}
+bird_of_prey_clean_poly %>%
+  filter(Country == "England") %>%
+  group_by(Year, species) %>%
+  summarise(
+    birds_killed = sum(count),
+    .groups = "drop"
+  ) %>%
+  filter(species == "Hen Harrier")
+#very sparse. There are lots of years with zero observation - this is a problem for DiD - there is no stable trend before 2016 and a lot of 0s -question the validity of the inference
+#instead....
+#what was the hen harrier action plan actually trying to achieve?
+#It wasn't simply to reduce the number of dead Hen Harriers. It also involved: nest protection,monitoring,stakeholder engagement,intelligence gathering,licensing discussions,reducing illegal persecution. --Those effects may spill over to other upland raptors.So instead of focusing on one species, I'd ask: Did persecution of upland-associated raptors change after the Hen Harrier Action Plan? now you're back to a much larger sample. For example, compare:Hen Harrier, Peregrine Falcon, Golden Eagle, Red Kite, Buzzard
+#"Although the Action Plan targeted Hen Harriers, wider enforcement and partnership measures may have influenced persecution of other raptor species."
+#view(
+  bird_of_prey_clean_poly %>%
+  filter(Country == "England") %>%
+  group_by(species) %>%
+  summarise(
+    birds_killed = sum(count),
+    incidents = n_distinct(rspb_ref),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(birds_killed))
+  #)#which species dominate the english data?
+```
+
+```{r}
+#england and rest of uk
+#Forty birds (hen harriers) over 18 years is a relatively small dataset. It isn't unusable, but it limits the strength of any formal causal analysis.
+```
+
+```{r}
+#Did the Hen Harrier Action Plan (2016), implemented in England, reduce recorded hen harrier persecution in England relative to the rest of the UK?
+#start again from bird_of_prey_clean_poly
+hen_harrier_data <- bird_of_prey_clean_poly %>%
+  filter(species == "Hen Harrier") #First filter only Hen Harriers.
+table(hen_harrier_data$Country)#check how many
+#         England         Scotland            Wales Northern Ireland 
+#              39               14                0                1 
+```
+
+```{r}
+#Aggregate by year and country
+hen_harrier_year_country <- hen_harrier_data %>%
+  group_by(Country, Year) %>%
+  summarise(
+    birds_killed = sum(count, na.rm = TRUE),
+    incidents = n_distinct(rspb_ref),
+    .groups = "drop"
+  )
+hen_harrier_year_country#look
+
+#Add missing zero years
+hen_harrier_year_country <- hen_harrier_year_country %>%
+  complete(
+    Country,
+    Year = 2007:2024,
+    fill = list(
+      birds_killed = 0,
+      incidents = 0
+    )
+  )
+#hen_harrier_year_country
+```
+
+```{r}
+#Create treatment variables
+hen_harrier_year_country <- hen_harrier_year_country %>%
+  mutate(
+    treated = ifelse(Country == "England", 1, 0),
+    post_policy = ifelse(Year >= 2016, 1, 0),
+    did = treated * post_policy
+  )
+```
+
+```{r}
+#rest of uk version
+hen_harrier_data <- bird_of_prey_clean_poly %>%
+  filter(species == "Hen Harrier") %>%
+  mutate(
+    Country = case_when(
+      Country == "England" ~ "England",
+      Country %in% c("Scotland", "Wales", "Northern Ireland") ~ "Rest of UK"
+    )
+  ) %>%
+  group_by(Year, Country) %>%
+  summarise(
+    birds_killed = sum(count, na.rm = TRUE),
+    incidents = n_distinct(rspb_ref),
+    .groups = "drop"
+  )
+#hen_harrier_data
+
+#Add missing zero years
+hen_harrier_data <- hen_harrier_data %>%
+  complete(
+    Country,
+    Year = 2007:2024,
+    fill = list(
+      birds_killed = 0,
+      incidents = 0
+    )
+  )
+hen_harrier_data#look again
+#view(hen_harrier_data)
+```
+
+```{r}
+#FIGURE 6
+ggplot(hen_harrier_data,
+       aes(x = Year,
+           y = birds_killed,
+           colour = Country)) +
+  annotate("rect",#rectangle to show before/after window           
+           xmin = 2012,#tight window start           
+           xmax = 2016,#end           
+           ymin = -Inf, ymax = Inf,#height of graph           
+           alpha = 0.05, fill = "#FFD700") +#transparent pastel yellow  
+  annotate("rect",#rectangle to show before/after window           
+           xmin = 2016,#tight window start           
+           xmax = 2024,#end           
+           ymin = -Inf, ymax = Inf,#height of graph           
+           alpha = 0.1, fill = "#FFD700") +#transparent pastel yellow  
+  
+  geom_line(linewidth = 1.5) +
+  geom_point(size = 2) +
+  scale_y_continuous(  breaks = seq(0, 10, by = 2) )+#y axis values
+  
+  
+  geom_vline(xintercept = 2012,#start             
+             linetype = "dotted", 
+             colour = "#FFD700", 
+             linewidth = 0.7) +    
+  geom_vline(xintercept = 2024,#tight end             
+             linetype = "dotted", 
+             colour = "#FFD700", 
+             linewidth = 0.7) +  
+  
+  geom_vline(xintercept = 2016,#intervention             
+             linetype = "dashed",#dashed line             
+             linewidth = 1,#width             
+             colour = "#ADC178",#colour             
+             alpha = 0.6) +#transparency  
+  annotate("text", #label for intervention         
+           x = 2016,#date of intervention         
+           y = 8,#not cluttered         
+           label = "",#"Intervention",#decribe intervention         
+           angle = 90,#on line        
+           vjust = -0.5,#gap         
+           size = 3,#font size         
+           colour = "#6B7F49")+#green to match line  
+
+  scale_colour_manual(
+    values = c(
+      "England" = "#CE1124",
+      "Rest of UK" = "lightblue"
+    )
+  ) +
+  
+  scale_x_continuous(
+    breaks = seq(2007, 2024, by = 1)
+  ) +
+  
+  labs(
+    title = "Confirmed Hen Harrier Illegal Killings in England and rest of UK",
+    subtitle = "Intervention: 2016 Hen Harrier Action Plan in England",
+    x = "Year",
+    y = "Confirmed Hen Harriers Persecutions",
+    colour = "Region"
+  ) +
+  theme_minimal()+
+  theme(
+  text = element_text(family = "serif", face = "bold"),
+  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+
+  panel.grid.major.y = element_line(colour = "grey90", linewidth = 0.4),
+  panel.grid.minor.y = element_blank(),
+  panel.grid.major.x = element_blank(),
+  panel.grid.minor.x = element_blank()
+)+
+  theme(
+    text = element_text(
+      family = "serif",
+      face = "bold"
+    ),
+    axis.text.x = element_text(
+      angle = 90,
+      vjust = 0.5,
+      hjust = 1
+    )
+  )
+```
+
+```{r}
+#create the did variables
+hen_harrier_data <- hen_harrier_data %>%
+  mutate(
+    treated = ifelse(Country == "England", 1, 0),
+    post_policy = ifelse(Year >= 2016, 1, 0), #January 2016
+    did = treated * post_policy
+    )
+
+#hen_harrier_data
+#Did persecution of Hen Harriers in England change after the Hen Harrier Action Plan compared with the rest of the UK?
+
+#There are only 43 Hen Harriers in total across the whole study.That doesn't make the analysis wrong, but it does mean:estimates will be unstable,confidence intervals will be wide,the model has limited statistical power - perfectly acceptable as long as  interpret it cautiously
+```
+
+```{r}
+#check the parallel trends assumption
+hh_pre <- hen_harrier_data %>% 
+  filter(Year >=2012 & Year <= 2015) %>% #pre intervention dataset
+  #"To assess the parallel trends assumption, the four years immediately preceding implementation (2012–2015) were used. --need a good reason why
+  mutate(
+    treated = ifelse(Country == "England", 1, 0)
+    )
+pretrend_model <- lm(
+  birds_killed ~ Year * treated,
+  data = hh_pre
+  )
+
+summary(pretrend_model)
+#Year:treated  -0.2000     0.3162  -0.632    0.561
+#"A linear model fitted to the pre-intervention period (2012–2015) found no significant interaction between year and treatment group (β = -0.20, p = 0.561), suggesting no evidence of differential pre-intervention trends between England and the Rest of the UK."
+```
+
+```{r}
+#fit the did model
+hh_did <- glm.nb(
+  birds_killed ~ treated * post_policy,
+  data = hen_harrier_data
+  )
+
+summary(hh_did)
+#a positive and significant interaction does not nessecarily mean the Action Plan caused more persecution. It could equally reflect improved detection, reporting, monitoring, or enforcement. That's an important point to discuss in your interpretation.
+#treated:post_policy   2.3788     0.9244   2.573   0.0101 *
+#exp(2.3788) #10.79194
+
+#After 2016, recorded Hen Harrier persecution in England increased by approximately 10.8 times more than the change observed in the Rest of the UK. - very large effect
+
+#"Following implementation of the Hen Harrier Action Plan in 2016, recorded Hen Harrier persecution increased significantly in England relative to the Rest of the UK. This may reflect increased persecution pressure, but could also reflect improved monitoring, reporting, or enforcement activity associated with the Action Plan."
+```
+
+```{r}
+hen_harrier_data %>%
+  group_by(Country, post_policy) %>%
+  summarise(
+    mean_killed = mean(birds_killed),
+    total_killed = sum(birds_killed),
+    years = n()
+  )
+```
+
+```{r}
+#quick check if the result is being driven by the negative binomial dispersion.
+
+hh_pois <- glm(
+  birds_killed ~ treated * post_policy,
+  family = poisson,
+  data = hen_harrier_data
+  )
+
+summary(hh_pois)
+#The fact that the Poisson and negative binomial models give the same conclusion is reassuring.
+#After 2016, recorded Hen Harrier persecution in England increased approximately 10.8-fold relative to the change observed in the Rest of the UK.
+```
+
+```{r}
+exp(confint(hh_did, "treated:post_policy"))
+#    2.5 %    97.5 % 
+# 1.863949 73.929635 
+#"The model estimated a substantial relative increase in recorded Hen Harrier persecution in England after 2016 (IRR = 10.79, 95% CI: 1.86–73.93). However, the wide confidence interval reflects the low number of recorded incidents and should be interpreted cautiously."
+```
+
+```{r}
+###########repeated for hen harrier action plan
+model_treat <- # Model 1: England vs Rest of UK
+  glm.nb(birds_killed ~ treated, data = hen_harrier_data)
+
+model_post <- # Model 2: before vs after policy
+  glm.nb(birds_killed ~ post_policy, data = hen_harrier_data)
+
+model_additive <- # Model 3: treatment and post period separately
+  glm.nb(birds_killed ~ treated + post_policy, data = hen_harrier_data)
+
+model_did <- # Model 4: DiD interaction
+  glm.nb(birds_killed ~ treated * post_policy, data = hen_harrier_data)
+
+
+DiDtable <- modelsummary(
+  list(
+    "Treat only" = model_treat,
+    "Post only" = model_post,
+    "Treat + post" = model_additive,
+    "Treat * post" = model_did
+  ),
+  coef_map = c(
+    "(Intercept)" = "Rest of UK, before",
+    "treated" = "Treat: England",
+    "post_policy" = "Post period",
+    "treated:post_policy" = "DiD estimate"
+  ),
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})"
+)
+
+DiDtable
+```
+
+#####  END
