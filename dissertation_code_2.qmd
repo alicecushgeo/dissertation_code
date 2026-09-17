@@ -1,0 +1,2788 @@
+---
+title: "tidy07.01"
+format: html
+editor: visual
+---
+
+# Dissertation code 2
+
+See dissertation_code_1 for data prep
+
+## Load Libraries
+
+```{r}
+rm(list = ls()) #remove all workspace objects
+```
+
+```{r message=FALSE, warning=FALSE}
+#load libraries
+library(tidyverse)# data management, manipulation, transformation and visualisation
+library(sf)# spatial data manipulation
+library(sp) #in maintenence mode and requires sf
+library(gridExtra) # data visualisation
+library(gstat)# interpolation
+library(ggplot2)
+library(viridis)
+library(moments)#skewness
+library(ggspatial)#basemap (cartodark)
+library(patchwork)#join 2 figures
+library(lubridate) #date format
+library(tidygeocoder) #geocode centroid of each grid square to get location name
+#install.packages("tidygeocoder")
+library(ggnewscale) 
+library(corrplot) #correlation plot
+library(MASS) #regression
+library(spdep) #check spatial auto correlation
+library(spatialreg) #errorsarlm() function
+library(ggeffects) #ggpredict()
+library(scales) #region bar chart%
+library(tidyr) #reshape data for bar chart
+library(ggthemes) #theme_() 
+library(car) #vif()
+library(lme4) #lmer() multilevel hierachical modelling
+library(jtools) #summ()
+library(merTools) #caterpillar plots
+library(lattice) #caterpilllar plots
+library(performance) #r2 for mixed models
+library(modelsummary) #did intervention analysis
+library(broom.mixed)
+library(flextable)###
+library(officer)
+library(glmmTMB)
+```
+
+```{r}
+#(.packages()) #see my loaded packages
+```
+
+## Loading, Joining and Manipulating Data
+
+```{r}
+#first load nuts1 regional geojson for plots (already in data from python clean)
+UKnuts1regions <- st_read("../data/UKnuts1regions.geojson", , quiet=TRUE)
+```
+
+### All UK 10km2 Grid Squares
+
+```{r}
+#load data
+#bird of prey cleaned python data
+grid10km_clean_all <- read.csv( #load csv
+  "../data/grid10km_clean_all_uk.csv")
+
+names(grid10km_clean_all)
+#"grid10km"      "bird_count"    "nuts1region"   "dist_to_nuts1" "built_up_mean" "geometry"      "centroid" 
+```
+
+```{r}
+#df <- 
+#  df %>%  
+#  select(, , , , )
+```
+
+```{r}
+ggplot(grid10km_clean_all, aes(x = bird_count)) +
+  geom_histogram(
+    bins = 50,
+    fill = "steelblue",
+    colour = "steelblue4"
+  ) +
+  labs(
+    x = "bird count",
+    y = "Number of 10 km grid squares"
+  ) +
+  theme_minimal() 
+#probably 0 inflated distribtuion ---explore... NB
+
+table(grid10km_clean_all$bird_count)
+#0    1    2    3    4    5    6    7    8    9   10   11   12   13   15   16   17   18   19   22   23 
+#1786 441  171  73   43   22   17   17   8    5    5    3    6    1    3    2    3    2    1    2    2 
+skewness(grid10km_clean_all$bird_count)
+#ggplot(grid10km_clean_all_poly_1, ##just actual observations
+#       aes(x = bird_count)) +
+#  geom_histogram(
+#    bins = 50,
+#    fill = "steelblue",
+#    colour = "steelblue4"
+#  ) +
+#  labs(
+#    x = "bird count",
+#    y = "Number of 10 km grid squares"
+#  ) +
+#  theme_minimal() 
+
+##label the type of distribution what it is
+##Kolmorgorov - Smirnoff test!!
+```
+
+### Urban/Rural classification for all UK Grid Squares
+
+```{r}
+#reassign northern ireland built up mean. done....
+#grid10km_clean_all %>%
+#  select(grid10km, built_up_mean, nuts1region) %>%
+#  View()
+```
+
+```{r}
+#names(grid10km_clean_all)
+####built_up_mean <--- calculated in python data clean
+
+summary(grid10km_clean_all$built_up_mean)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   0.00   80.01  194.52  266.63  356.89 1703.53 
+#summary(grid10km_clean_all_poly$built_up_mean) #rerun at end
+#summary(grid10km_clean_all_poly_1$built_up_mean)
+```
+
+```{r}
+ggplot(grid10km_clean_all, aes(x = built_up_mean)) +
+  geom_histogram(
+    bins = 50,
+    fill = "steelblue",
+    colour = "steelblue4"
+  ) +
+  labs(
+    x = "Mean built-up value",
+    y = "Number of 10 km grid squares"
+  ) +
+  theme_minimal() 
+#very right skewed, lots of very rural grids in UK
+```
+
+```{r}
+#new column of logged built up mean to fix skew
+grid10km_clean_all <- grid10km_clean_all %>%
+  mutate(
+    built_up_log = log1p(built_up_mean) #1p good for 0 values (lots -Inf)
+  )
+#probs use this continuous measure for regression
+summary(grid10km_clean_all$built_up_log) ##logged built up mean
+#  Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#  0.000   4.395   5.276   4.780   5.880   7.441 
+
+#log built_up_mean
+ggplot(grid10km_clean_all,
+       aes(x = built_up_log)) +  
+  #log1p() safely handles zero values
+  geom_histogram(
+    bins = 40,
+    fill = "steelblue",
+    colour = "steelblue4"
+  ) +
+  labs(
+    x = "log(1 + built-up mean)",
+    y = "Number of grid squares"
+  ) +
+  theme_minimal()
+#better distribution
+```
+
+```{r}
+#freq table to inform urban/rural bins
+grid10km_clean_all %>%
+  mutate(
+    built_up_bin = cut(
+      built_up_log,
+      breaks = seq(0, 8, by = 1),
+      right = FALSE,   #>= lower, < upper
+      include.lowest = TRUE
+    )
+  ) %>%
+  count(built_up_bin) %>%
+  arrange(built_up_bin)
+```
+
+```{r}
+#create manual arbitrary thresholds for rural/urban from built up mean
+grid10km_clean_all <- grid10km_clean_all %>%
+  mutate(
+    built_up_class = case_when(
+      built_up_log >= 0 & built_up_log < 2 ~ "very rural",
+      built_up_log >= 2 & built_up_log < 4 ~ "rural",
+      built_up_log >= 4 & built_up_log < 5.5 ~ "semi-rural",
+      built_up_log >= 5.5 & built_up_log < 6.5 ~ "semi-urban",
+      built_up_log >= 6.5 & built_up_log < 7 ~ "urban",
+      built_up_log >= 7 & built_up_log <= 8 ~ "very urban",
+      TRUE ~ NA_character_
+    )
+  )
+
+#set factor order, default is alphabetical
+grid10km_clean_all$built_up_class <- factor(
+  grid10km_clean_all$built_up_class,
+  levels = c(
+    "very rural",
+    "rural",
+    "semi-rural",
+    "semi-urban",
+    "urban",
+    "very urban"
+  )
+)
+#view(grid10km_clean_all)
+table(grid10km_clean_all$built_up_class)
+#very rural      rural semi-rural semi-urban      urban very urban 
+#       268        244       1034        838        186         43 
+#not even because of nature of urban/rural uk layout
+```
+
+### Join Geocoded location info to Grid10km_clean_all
+
+```{r}
+#geocoding grids using grid10km_clean_all_point
+##dont need to run again (commented) - here for reproducability
+
+#grid10km_clean_all_point_4326 <- 
+#  st_transform(grid10km_clean_all_point, 4326) #convert to WGS84 first
+#coords4326 <- st_coordinates(grid10km_clean_all_point_4326) #extract coordinates from the geometry
+#grid10km_clean_all_point <- grid10km_clean_all_point_4326 %>%
+#  mutate( #new 2326 lon and lat columns to grid10km_clean_all_point
+#    lon_4326 = coords4326[, 1],
+#    lat_4326 = coords4326[, 2]
+#  )
+
+# Reverse geocode the centroids #took about 30 mins
+#dont run again  - ran, selected columns and saved as :
+#"C:\Users\user\OneDrive\aLiverpoolUniversity\Semester3\Dissertation\data\grid10km_uk_geocode.csv"
+#locations <- grid10km_clean_all_point %>%
+#  reverse_geocode(
+#    lat = lat_4326,
+#    long = lon_4326,
+#    method = "osm", #open street map
+#    full_results = TRUE
+#  )
+
+#view(locations)
+#getwd()
+
+#write.csv(
+#  ###geocodedf,
+#  "../data/grid10km_uk_geocode.csv",
+#  row.names = FALSE
+#)
+
+#geocoded grids========
+grid10km_uk_geocode <- read.csv( #load csv
+  "../data/grid10km_uk_geocode.csv") #need to add built up classification and other columns
+
+#names(grid10km_uk_geocode)
+# "grid10km"  "county"    "state"     "address"   "city"      "postcode"  "place_id"  "lon"       "lat"       "lon_27700" "lat_27700" "lon_4326" "lat_4326"
+#view(grid10km_uk_geocode)
+```
+
+```{r}
+#JOIN geocoded locations
+grid10km_clean_all <- grid10km_clean_all %>%
+  left_join(
+    grid10km_uk_geocode %>%
+      dplyr::select( #masked by another package
+        grid10km,
+        county,
+        city,
+        address,
+        state,
+        postcode,
+        place_id,
+        lon_27700,
+        lat_27700,
+        lon_4326,
+        lat_4326
+      ),
+    by = "grid10km"
+  )
+#view(grid10km_clean_all) #visual check join
+```
+
+### Set Grid10km_clean_all as \_poly and \_point sf
+
+```{r}
+#create sf objects from grid10km_clean_all 
+
+#grid squares 10x10km
+grid10km_clean_all_poly <- st_as_sf(
+  grid10km_clean_all,
+  wkt = "geometry",
+  crs=27700) #british national grid
+#st_crs(grid10km_clean_all_poly) 27700 
+#plot(grid10km_clean_all_poly$geometry)
+```
+
+### Assign Upland cover values to all UK Grid Squares using \_poly
+
+```{r}
+#grid10km_clean_all_poly for intersect
+uplands <- st_read("../data/uplands.geojson", quiet=TRUE)
+```
+
+```{r}
+#plot(grid10km_clean_all_poly$geometry)
+#st_crs(grid10km_clean_all_poly) #27700
+#plot(uplands$geometry)
+#st_crs(uplands) #27700
+```
+
+```{r}
+#sum(!st_is_valid(grid10km_clean_all_poly)) #0 #good
+#sum(!st_is_valid(uplands)) #1 make valid
+uplands <- st_make_valid(uplands)
+#sum(!st_is_valid(uplands)) #0 good
+upland_grid_intersect <- #intersect uplands with grid
+  st_intersection(
+    grid10km_clean_all_poly,
+    uplands
+)
+#Warning: attribute variables are assumed to be spatially constant throughout all geometries
+```
+
+```{r}
+# calculate area of upland inside each grid square with upland_grid_intersect
+upland_area <- upland_grid_intersect %>%
+  mutate(upland_area = st_area(.)) %>%
+  st_drop_geometry() %>% #drop geometrry
+  group_by(grid10km) %>% #group by each grid square
+  summarise(upland_area = sum(upland_area, na.rm = TRUE)) #sum of upland area
+
+# calculate full grid cell area
+grid_area <- grid10km_clean_all_poly %>%
+  mutate(grid_area = st_area(.)) %>%
+  st_drop_geometry() %>%
+  dplyr::select(grid10km, grid_area)
+
+# join and compute proportion
+grid10km_clean_all_poly <- grid10km_clean_all_poly %>%
+  left_join(upland_area, by = "grid10km") %>%
+  left_join(grid_area, by = "grid10km") %>%
+  mutate(
+    upland_area = ifelse(is.na(upland_area), 0, upland_area),
+    upland_prop = as.numeric(upland_area / grid_area) #0 to 1 proportion
+  )
+```
+
+```{r}
+#binary presence of upland
+grid10km_clean_all_poly$upland_binary <- as.integer(
+  lengths(st_intersects(grid10km_clean_all_poly, uplands)) > 0
+)
+```
+
+```{r}
+#join upland info to grid_10km_clean_all and grid_10km_clean_all_point for consistency
+#names(grid10km_clean_all_poly) #these 2: "upland_prop"    "upland_binary" 
+
+#first make a small lookup table (cleaner + safer)
+upland_lookup <- grid10km_clean_all_poly %>%
+  dplyr::select(grid10km, upland_prop, upland_binary)
+
+grid10km_clean_all <- grid10km_clean_all %>%
+  left_join(upland_lookup, by = "grid10km")
+
+#centroid points (centre of 10km)
+grid10km_clean_all_point <- st_as_sf(
+  grid10km_clean_all,
+  wkt = "centroid",
+  crs=27700) #british national grid
+#st_crs(grid10km_clean_all_point) #27700 
+#plot(grid10km_clean_all_point$centroid)
+```
+
+### Load bird_of_prey individual, set as sf, assign calculations (urban, upland)
+
+```{r}
+#bird of prey cleaned python data
+bird_of_prey_clean <- read.csv( #load csv
+  "../data/bird_of_prey_clean_uk2.csv") ####v2 includes rspb_ref
+#names(bird_of_prey_clean)
+# "grid10km" "rspb_ref" species" "count" "incident_type" "Details"       "Month"         "Year" "nuts1region" "County" "Country" "built_up_mean" "geometry" "centroid" 
+#str(bird_of_prey_clean) #1875 x 14
+```
+
+```{r}
+#Sort out the date_month_year and date_year columns with the lubridate library
+
+bird_of_prey_clean |>
+  mutate(date_month_year = dmy(paste("1", Month, Year))) |>
+  filter(is.na(date_month_year)) |>
+  dplyr::select(Month, Year)
+# Month "Withheld" x 20
+
+#set month and year as date format
+#month and year
+bird_of_prey_clean_date <- bird_of_prey_clean |>
+  mutate(
+    Month = na_if(Month, "Withheld"),
+    date_month_year = dmy(paste("1", Month, Year))
+  )
+#Warning: There was 1 warning in `mutate()`.
+#ℹ In argument: `date_month_year = dmy(paste("1", Month, Year))`.
+#Caused by warning:
+#!  20 failed to parse.
+sum(is.na(bird_of_prey_clean_date$date_month_year)) #20 - fine were using year for study
+
+#just year
+bird_of_prey_clean_date <- bird_of_prey_clean_date |>
+  mutate(
+    date_year = dmy(paste("1", "1", Year))
+  )
+
+str(bird_of_prey_clean_date) #check new Date columns #still 1875 x  15 
+```
+
+```{r}
+#join built up and upland info from grid10km_clean_all to bird_of_prey_clean_date
+##########join
+#str(grid10km_clean_all)
+
+#names(bird_of_prey_clean_date)
+# [1] "grid10km"        "species"         "count"           "incident_type"   "Details"         "Month"           "Year"            "nuts1region"    
+# [9] "County"          "Country"         "built_up_mean"   "geometry"        "centroid"        "date_month_year" "date_year" 
+#names(grid10km_clean_all)
+# [1] "grid10km"       "bird_count"     "nuts1region"    "dist_to_nuts1"  "built_up_mean"  "geometry.x"     "centroid"       "built_up_log"   "built_up_class"
+#[10] "county"         "city"           "address"        "state"          "postcode"       "place_id"       "lon_27700"      "lat_27700"      "lon_4326"
+#[19] "lat_4326"       "upland_prop"    "upland_binary"  "geometry.y"   
+
+#JOIN all calculated columns to actual observations of wildlife crime
+bird_of_prey_clean_date_join <- bird_of_prey_clean_date %>%
+  left_join(
+    grid10km_clean_all %>%
+      st_drop_geometry() %>%      # remove sf geometry before joining
+      dplyr::select(
+        grid10km,
+        bird_count_grid_total= bird_count, #rename inside the join
+        dist_to_nuts1, #to know if on edge of border
+        built_up_log, #URBAN/RURAL
+        built_up_class, #URBAN/RURAL
+        upland_prop, #UPLAND
+        upland_binary, #UPLAND
+        county, city, address, state, postcode, place_id, #geocoded    
+        lon_27700, lat_27700, lon_4326, lat_4326
+      ),
+    by = "grid10km"
+  )
+
+#view(bird_of_prey_clean_date_join) #check
+```
+
+```{r}
+#=====
+#set bird_of_prey_clean_date_join data frame as sf
+#grid squares 10x10km
+bird_of_prey_clean_poly <- st_as_sf(
+  bird_of_prey_clean_date_join,
+  wkt = "geometry",
+  crs=27700) #british national grid
+#st_crs(bird_of_prey_clean_poly) #27700 
+#plot(bird_of_prey_clean_poly$geometry)
+
+#centroid points (centre of 10km)
+bird_of_prey_clean_point <- st_as_sf(
+  bird_of_prey_clean_date_join,
+  wkt = "centroid",
+  crs=27700) #british national grid
+#st_crs(bird_of_prey_clean_point) #27700 
+#plot(bird_of_prey_clean_point$centroid)
+```
+
+### Check column datatypes, reorder, recode, remove etc.
+
+```{r}
+#get all data fully ready for analysis - data types, clean, tidy, values
+#remove (England) from nuts1region for readabililty
+###checkkkk 
+#make sure theyre all consistent cos ill be going back and forth between them for different reasons
+
+#grid10km_poly with geocode, urban, upland
+#view(grid10km_clean_all_poly)
+
+#grid10km_point with geocode, urban, upland
+#view(grid10km_clean_all_point)
+
+#bop_poly with geocode, urban, upland
+#view(bird_of_prey_clean_poly)
+
+#bop_point with geocode, urban, upland
+#view(bird_of_prey_clean_point)
+```
+
+```{r}
+#check calculations
+#check built up values
+ggplot(grid10km_clean_all_poly) +
+  geom_sf(aes(fill = built_up_log), colour = NA) +
+  scale_fill_viridis_c(
+    option = "magma",   # try "viridis", "plasma", "inferno" too
+    name = "Built-up (log1p)"
+  ) +
+  labs(
+    title = "Built-up Intensity Across UK 10km Grid Squares (log scale)"
+  ) +
+  theme_void()
+
+ggplot(grid10km_clean_all_poly) +
+  geom_sf(aes(fill = built_up_class), colour = NA) +
+  scale_fill_brewer(palette = "YlOrRd", name = "Built-up class") +
+  theme_void()
+
+#check upland values
+ggplot(grid10km_clean_all_poly) +
+  geom_sf(aes(fill = upland_prop), colour = NA) +
+  scale_fill_viridis_c(
+    option = "viridis",
+    name = "Upland proportion"
+  ) +
+  theme_void()
+
+ggplot(grid10km_clean_all_poly) +
+  geom_sf(aes(fill = factor(upland_binary)), colour = NA) +
+  scale_fill_manual(
+    values = c("0" = "grey90", "1" = "darkgreen"),
+    name = "Upland presence",
+    labels = c("No upland", "Upland present")
+  ) +
+  theme_void()
+```
+
+## Figures
+
+### Sort Regions and Upland Area for bar chart
+
+```{r}
+#first rename the regions by removing (England)
+grid10km_clean_all_poly <- grid10km_clean_all_poly %>%
+  mutate(
+    nuts1region = dplyr::recode(
+      nuts1region,
+      "North East (England)" = "North East",
+      "North West (England)" = "North West",
+      "Yorkshire and The Humber" = "Yorkshire & The Humber",
+      "East Midlands (England)" = "East Midlands",
+      "West Midlands (England)" = "West Midlands",
+      "East of England" = "East", #of england
+      "London" = "London",
+      "South East (England)" = "South East",
+      "South West (England)" = "South West",
+      "Scotland" = "Scotland", #not england
+      "Wales" = "Wales", #not england
+      "Northern Ireland" = "Northern Ireland" #not england
+    )
+  )
+```
+
+```{r}
+#plot(UKnuts1regions$geometry)
+#plot(uplands$geometry)
+#st_crs(UKnuts1regions) #same 27700
+#st_crs(uplands)#same 27700
+```
+
+```{r}
+#names(UKnuts1regions) #nuts118nm
+
+UKnuts1regions <- UKnuts1regions %>%
+  mutate(
+    nuts118nm = dplyr::recode(
+      nuts118nm,
+      "North East (England)" = "North East",
+      "North West (England)" = "North West",
+      "Yorkshire and The Humber" = "Yorkshire & The Humber",
+      "East Midlands (England)" = "East Midlands",
+      "West Midlands (England)" = "West Midlands",
+      "East of England" = "East", #of england
+      "London" = "London",
+      "South East (England)" = "South East",
+      "South West (England)" = "South West",
+      "Scotland" = "Scotland", #not england
+      "Wales" = "Wales", #not england
+      "Northern Ireland" = "Northern Ireland" #not england
+    )
+  )
+
+#calculate area of each nutsregion
+nuts_area <- UKnuts1regions %>% 
+  mutate(
+    region_area = st_area(.)
+  ) %>%
+  st_drop_geometry() %>%
+  dplyr::select(nuts118nm, region_area)
+#nuts_area #check sizes
+
+#Intersect uplands with NUTS1 boundaries - cuts the upland polygons at the regional boundaries.
+uplands_by_region <- st_intersection( 
+  UKnuts1regions %>% dplyr::select(nuts118nm),
+  uplands
+)
+#Warning: attribute variables are assumed to be spatially constant throughout all geometries
+
+#Calculate upland area inside each region
+upland_area_region <- uplands_by_region %>%
+  mutate(
+    upland_area = st_area(.)
+  ) %>%
+  st_drop_geometry() %>%
+  group_by(nuts118nm) %>%
+  summarise(
+    upland_area = sum(upland_area)
+  )
+
+#Calculate upland proportion
+region_upland <- nuts_area %>%
+  left_join(
+    upland_area_region,
+    by = "nuts118nm"
+  ) %>%
+  mutate(
+    upland_area = as.numeric(upland_area), #remove [m^2]
+    region_area = as.numeric(region_area), #remove [m^2]
+    upland_area = tidyr::replace_na(upland_area, 0),
+    upland_prop = as.numeric(upland_area / region_area),
+    upland_perc = upland_prop * 100
+  )
+
+
+region_upland <- region_upland %>% rename(nuts1region = nuts118nm)#rename
+
+#view(region_upland) ###upland_prop / upland_perc
+
+#calculate upland_share
+region_upland <- region_upland %>%
+  mutate(
+    upland_share = (upland_area / sum(upland_area)) * 100
+  )
+```
+
+### Grid Squares Only (\_1 and all UK)
+
+```{r}
+# _1 is grids where bird count is 1+
+grid10km_clean_all_poly_1 <- grid10km_clean_all_poly |>
+  filter(bird_count > 0)
+grid10km_clean_all_point_1 <- grid10km_clean_all_point |>
+  filter(bird_count > 0)
+```
+
+```{r}
+summary(grid10km_clean_all_poly_1$bird_count)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#  1.000   1.000   1.000   2.485   3.000  23.000 
+
+###make a histogram of this
+
+ggplot(grid10km_clean_all_poly_1) +
+  geom_sf(aes(fill = bird_count), colour = "NA") +
+  scale_fill_viridis_c(
+    option = "viridis",
+    name = "Bird count"
+  ) +
+  labs(
+    title = "Recorded Bird of Prey Counts by 10 km Grid Square"
+  ) +
+  theme_void()
+
+ggplot(grid10km_clean_all_poly) +
+  geom_sf(aes(fill = bird_count), colour = "NA") +
+  scale_fill_viridis_c(
+    option = "viridis",
+    name = "Bird count"
+  ) +
+  labs(
+    title = "Recorded Bird of Prey Counts by 10 km Grid Square"
+  ) +
+  theme_void()
+
+#uplands
+#UKnuts1regions
+```
+
+### Figure 1
+
+```{r}
+#FIGURE 1 (a)
+#manually create discrete bird_count bins
+grid10km_clean_all_poly_1 <- grid10km_clean_all_poly_1 |>
+  mutate(
+    bird_count_bin = cut(
+      bird_count,
+      breaks = c(0, 1, 2, 5, 10, Inf),
+      labels = c("1", "2", "3-5", "6-10", "11+"),
+      include.lowest = TRUE,
+      right = TRUE
+    )
+  )
+
+bird_count_cols <- c(
+  #"0" = "lightgreen",
+  "1" = "#FEE8C8",    # light orange
+  "2" = "#FDBB84",
+  "3-5" = "#FC8D59",
+  "6-10" = "#E34A33",
+  "11+" = "darkred"   # dark red = bad ##B30000
+)
+
+ggplot() +
+  #regional borders
+geom_sf(# Beige polygons
+  data = UKnuts1regions,
+  fill = "#E6EDF4",
+  colour = NA
+) +
+  new_scale_fill() +
+    geom_sf(
+    data = uplands, # Uplands
+    aes(fill = "Uplands:\nMountains, Moorlands\nand Heathlands"), #title
+    colour = NA,
+    alpha = 1) + #transparency
+  scale_fill_manual(
+    values = c(
+      "Uplands:\nMountains, Moorlands\nand Heathlands" = 
+        "#9DBCD4"), #blue contrasts with red
+    name = NULL ) + 
+  geom_sf(# Black outlines
+  data = UKnuts1regions,
+  fill = NA,
+  colour = "black",
+  linewidth = 0.1
+) +
+  new_scale_fill() +
+  geom_sf(
+    data = grid10km_clean_all_poly_1,
+    aes(fill = bird_count_bin), #above chunk
+    colour = NA,
+    alpha = 0.8) +
+  scale_fill_manual(
+    values = bird_count_cols, #defined in above chunk
+    name = "Birds Illegally Killed\n(per 10km²)",
+    drop = FALSE) +
+#  labs(
+    #remove/crop title and replace with figure caption
+#    title = "Confirmed Bird of Prey Kills 2007-2024",
+#    subtitle = "Underlayed with Upland Cover and Regional Borders"
+#  ) +
+  annotation_north_arrow( #NORTH ARROW
+  location = "tr", #tr,tl,br,bl
+  which_north = "grid",
+  style = north_arrow_fancy_orienteering,
+  pad_x = unit(0, "cm"),
+  pad_y = unit(0.8, "cm"),
+  height = unit(1.2, "cm"),
+  width = unit(1.2, "cm")
+) +
+  annotation_scale( #SCALE
+  location = "tr",#tr,tl,br,bl
+  width_hint = 0.25,
+  pad_x = unit(0, "cm"),
+  pad_y = unit(2.2, "cm"),   # pushes it down below the north arrow
+  text_cex = 0.8,
+  line_width = 0.8
+) +
+  theme_void()+
+  theme(
+  plot.title = element_text(
+    family = "serif",# font
+    size = 14,# font size
+    face = "bold",# plain, bold, italic, bold.italic
+    hjust = 0.5# 0 = left, 0.5 = centre, 1 = right
+  ),
+  plot.subtitle = element_text(
+    family = "serif",
+    size = 10,
+    hjust = 0.5
+  ),
+  legend.text = element_text(
+    family = "serif",
+    size = 12,
+    face="bold"
+  ),
+  legend.title = element_text(
+    family = "serif",
+    size = 12,
+    face = "bold"
+  ),
+  plot.background = element_rect(fill = "white", color = NA),#white background
+  panel.background = element_rect(fill = "white", color = NA)
+)
+#windowsFonts() #serif, sans, mono
+# probably collab on a patchwork plot with regional bar chart
+
+```
+
+```{r}
+#view(grid10km_clean_all_poly_1) #inspect top 23 places - scotland, yorkshire, scotland
+```
+
+```{r}
+#make a regional bar chart of bird_count per NUTS1region
+
+bird_region <- grid10km_clean_all_poly_1 %>%
+  group_by(nuts1region) %>% #Major socio-economic regions
+  summarise(total_bird_count = sum(bird_count, na.rm = TRUE)) %>%
+  ungroup()
+
+#view(bird_region)
+
+#oin the upland share data into bird_region
+bird_region <- bird_region %>%
+  left_join(
+    region_upland %>%
+      dplyr::select(nuts1region, upland_share),
+    by = "nuts1region"
+  )
+```
+
+```{r}
+#sum(bird_region$total_bird_count) #2055
+#scales library
+# create scaled bird count for plotting
+bird_region <- bird_region %>%
+  mutate(
+    bird_percent = (total_bird_count / sum(total_bird_count)) * 100
+  )
+#view(bird_region)
+```
+
+```{r}
+#FIGURE 1 (b)
+##this
+bird_region_long <- bird_region %>%
+  dplyr::select(
+    nuts1region,
+    total_bird_count,
+    upland_share,
+    bird_percent
+  ) %>%
+  pivot_longer(
+    cols = c(bird_percent, upland_share),
+    names_to = "category",
+    values_to = "percentage"
+  ) %>%
+  mutate(
+    label = case_when(
+      category == "bird_percent" ~ paste0(
+        total_bird_count,
+        " (",
+        round(percentage, 1),
+        "%)"
+      ),
+      category == "upland_share" ~ paste0(
+        round(percentage, 1),
+        "%"
+      )
+    ),
+    category = factor(
+      category,
+      levels = c("upland_share", "bird_percent")
+    )
+  )
+#view(bird_region_long)
+
+bird_region_long <- bird_region_long %>%
+  mutate(
+    category = factor(
+      category,
+      levels = c("upland_share","bird_percent") #reorder factor so when coord flip red on top
+    )
+  )
+
+
+###figure 1 (b) bar chart plot
+ggplot(
+  bird_region_long,
+  aes(
+    x = reorder(nuts1region, total_bird_count), #most to least birds
+    y = percentage,
+    fill = category
+  )
+) +
+  geom_col( #column thickness and spacing
+    position = position_dodge(width = 0.9),#gap between the two bars -smaller is closer
+    width = 0.9 #thickness
+  ) +
+  geom_text(
+  aes(
+    label = label
+  ),
+  position = position_dodge(width = 0.9),
+  hjust = -0.2,
+  size = 3.5,
+  family = "serif",
+  fontface = "bold",
+  colour = "black"
+) +
+  geom_text(
+  aes(
+    label = label,
+    colour = category
+  ),
+  position = position_dodge(width = 0.9),
+  hjust = -0.2,
+  size = 3.5,
+  family = "serif",
+  fontface = "bold"
+) +
+  coord_flip() +
+  scale_colour_manual(
+  values = c(
+    bird_percent = "darkred",
+    upland_share = "#527A9E"
+  ),
+  guide = "none"
+) +
+  scale_fill_manual(
+    values = c(
+      bird_percent = "darkred",
+      upland_share = "#9DBCD4"
+    ),
+    labels = c(
+      bird_percent = "Birds Illegaly Killed (per region)",
+      upland_share = "Share of UK Upland Habitat (per region)"
+    )
+  ) +
+  labs(
+#    title = "Bird of Prey Illegal Killings and Upland Habitat\nby NUTS1 Region",
+#    subtitle = "Comparison of regional contribution to UK totals",
+    x = "Region (NUTS1)",
+    y = "Percentage of UK total (%)",
+    fill = NULL
+  ) +
+    theme_minimal( #theme_classic, theme_minimal, theme_economist(
+    base_size = 15, base_family ="serif") + #text size and font
+  theme(
+    text = element_text(family = "serif", face="bold"), #times new roman
+    axis.title = element_text(family = "serif",face = "bold",size = 15),
+#    axis.text = element_text(family = "serif",face = "bold",size = 11),
+#    plot.title = element_text(family = "serif",face = "bold",size = 16,
+#                              hjust = 0.5),
+#    plot.subtitle = element_text(family = "serif",face = "bold",size = 12,
+#                                 hjust = 0.5),
+    #minimalistic white background FT
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    #minimalistic horizontal lines FT
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.y = element_line(color = "white", size = 0.5),
+    #axis
+        axis.line.x = element_line(color = "#262a33", size = 0.6),
+    axis.ticks.x = element_line(color = "#262a33"),
+    axis.text = element_text(size = 15)
+  )
+```
+
+### KWD: Kernel Density Estimation - good to see concentration in yorkshire - dont need to put study in actual study
+
+```{r}
+grid10km_clean_all_point_3857 <- 
+  st_transform(grid10km_clean_all_point, 3857) #transform crs for basemap alignment
+#view(grid10km_clean_all_point_3857)
+```
+
+```{r}
+#expand rows by bird_count
+# use only grid cells with birds
+kde_data <- grid10km_clean_all_point_3857 |>
+  filter(bird_count > 0) |>
+  uncount(weights = bird_count) #grid squares with higher counts contribute more
+
+coords <- st_coordinates(kde_data) # extract centroid coordinates
+
+kde_df <- cbind(
+  st_drop_geometry(kde_data),
+  X = coords[, "X"],
+  Y = coords[, "Y"]
+)
+
+kde <- ggplot() +
+  annotation_map_tile(
+    type = "cartolight", #cartolight, cartodark
+    zoom = 6
+  ) +
+  stat_density2d_filled(
+    data = kde_df,
+    aes(x = X, y = Y),
+    alpha = 0.5,#transparency
+    n = 200, #resolution
+    bins = 7 #colour bands
+  ) +
+  scale_fill_viridis_d(
+    option = "magma", #magma, inferno, viridis
+    name = "Density", #legend title
+    labels = c("Low", "", "", "", "", "", "High"), #replace scientific notation
+    guide = guide_legend(reverse = TRUE) #high at top
+  ) +
+  ggtitle("KDE of Confirmed Bird of Prey Crimes") +
+  theme_void()
+
+kde
+
+#Kernel density values are displayed as relative density classes from low to high, rather than raw values, because the density estimates are calculated per map unit and are therefore very small in magnitude
+#KDE density is expressed per unit area, map is in EPSG:3857 metres. So the values are effectively density per square metre-ish, which makes them look tiny
+#3.77e-12 - 4.40e-12, 3.14e-12 - 3.77e-12, 2.51e-12 - 3.14e-12, 1.89e-12 - 2.51e-12, 1.26e-12 - 1.89e-12, 6.29e-13 - 1.26e-12, 0.00e+00 - 6.29e-13
+```
+
+```{r}
+uplands_3857 <- 
+  st_transform(uplands, 3857) #transform crs for basemap alignment
+
+UKnuts1regions3857 <- 
+  st_transform(UKnuts1regions, 3857) 
+#better
+ggplot() +
+  annotation_map_tile(
+    type = "cartolight",
+    zoom = 6
+  ) +
+   # Uplands underlay #maybe comment out
+  geom_sf(
+    data = uplands_3857,
+    fill = "grey70",
+    colour = NA,
+    alpha = 1
+  ) +
+  geom_sf(# regional border outlines #maybe comment out
+  data = UKnuts1regions3857,
+  fill = NA,
+  colour = "grey80",
+  linewidth = 0.1
+) +
+  stat_density_2d(
+    data = kde_df,
+    aes(
+      x = X,
+      y = Y,
+      fill = after_stat(density)
+    ),
+    geom = "raster",
+    contour = FALSE,
+    n = 200,
+    alpha = 0.5
+  ) +
+  scale_fill_gradientn(
+  colours = c(
+    "transparent",
+#    "lightyellow",
+#    "lightgreen",
+#    "#9ECAE1",
+#    "#6A51A3",
+#    "#CB181D",
+    "#DEEBF7",
+    "#9ECAE1",
+    "#4292C6",
+"yellow",
+    "#FDD835",
+    "#F57C00",
+"red"
+  ),
+  name = "Density"
+)+
+#  annotation_north_arrow( #NORTH ARROW
+#  location = "tr", #tr,tl,br,bl
+#  which_north = "grid",
+#  style = north_arrow_fancy_orienteering,
+#  pad_x = unit(0, "cm"),
+#  pad_y = unit(0.8, "cm"),
+#  height = unit(1.2, "cm"),
+#  width = unit(1.2, "cm")
+#) +
+#  annotation_scale( #SCALE
+#  location = "tr",#tr,tl,br,bl
+#  width_hint = 0.25,
+#  pad_x = unit(0, "cm"),
+#  pad_y = unit(2.2, "cm"),   # pushes it down below the north arrow
+#  text_cex = 0.8,
+#  line_width = 0.8
+#) 
+  theme_void()
+```
+
+### A value of 0 means no confirmed incidents - kept  and justified (IDW considered)
+
+```{r}
+#sum(grid10km_clean_all_point$bird_count == 0, na.rm = TRUE)
+#1786 / 2055
+```
+
+## !Regression coefficients and statistical analysis 
+
+```{r}
+#a load of this goes in the METHODOLOGY SECTION
+#str(grid10km_clean_all_poly)###this is the data 2007-2024 all species whole UK
+
+#assess variables before regression
+#dependent variable: bird_count 
+#integer 0 - 23
+#    summary(grid10km_clean_all_poly$bird_count)
+#Min = 0, 1st Qu. = 0, Median = 0, Mean = 0.7865, 3rd Qu. = 1, Max = 23 (incl 0)
+
+#50% of grid squares have zero recorded incidents (because median = 0)
+#75% of grid squares have ≤1 incident
+#A small number of grid squares have much higher counts (up to 23)
+
+#strongly right-skewed -expected for spatial incident data most locations will have no recorded persecution -  small number are hotspots
+
+#    summary(grid10km_clean_all_poly_1$bird_count)
+#Min = 1, 1st Qu. = 1, Median = 1, Mean = 2.485,  3rd Qu. = 3, Max =23 (1<)
+#not normally distributed
+#right-skewed
+#count data
+#zero-heavy / zero-inflation [[ #1786 / 2613 grids are 0... *100 = 68.4% zeros
+
+sum(grid10km_clean_all_poly$bird_count == 0)
+length(grid10km_clean_all_poly$bird_count) 
+###butttt Are these zeros "structural zeros" (places where persecution cannot occur), or are they just unobserved/rare events? in this case, a zero means no confirmed bird persecution records, not necessarily that persecution cannot occur
+
+#A zero-inflated model assumes there are two processes: 1. A process deciding whether a grid square can ever have persecution: e.g. sea, inaccessible areas, unsuitable habitat. 2. A count process: given that persecution can occur, how many incidents happen? These zeros are probably a mixture of: genuinely low-risk areas, under-reporting, areas without incidents during the study period ...So we shouldn't jump automatically to zero-inflated models.
+
+mean(grid10km_clean_all_poly$bird_count) #0.7864524
+var(grid10km_clean_all_poly$bird_count) #4.115942
+#var > mean, overdispersed, so Poisson regression is unsuitable which assumes var=mean, Poisson model would underestimate the uncertainty.
+#variance / mean = 5.23 which means variance is over 5 times larger than the mean = overdispersion
+
+table(grid10km_clean_all_poly$bird_count)
+grid10km_clean_all_poly %>%
+  count(bird_count, name = "Frequency") %>%
+  mutate(
+    Percentage = round(Frequency / sum(Frequency) * 100, 2)
+  )
+```
+
+```{r}
+grid10km_clean_all_poly %>%
+  st_drop_geometry() %>%
+  group_by(bird_count == 0) %>%
+  summarise(
+    mean_upland = mean(upland_prop),
+    mean_built = mean(built_up_mean)
+  )
+#bird_count == 0   mean_upland   mean_built
+#          FALSE 	 0.2832131	   318.7330		1<
+#           TRUE 	 0.2968392	   242.5074   0
+
+#try median because of skew
+grid10km_clean_all_poly %>%
+  st_drop_geometry() %>%
+  group_by(bird_count == 0) %>%
+  summarise(
+    median_upland = median(upland_prop),
+    median_built = median(built_up_mean)
+  )
+#bird_count == 0    median_upland    median_built
+#          FALSE    	0.000000000	   249.8149		
+#           TRUE     	0.009999967	   166.4960	
+#the grid square with incidents is actually not an upland square...At least 50% of grid squares have no upland area  -but upland is not irrelevent - perhaps the  upper tail of upland proportion differs
+
+grid10km_clean_all_poly %>%
+  st_drop_geometry() %>%
+  group_by(bird_count == 0) %>%
+  summarise(
+    mean_upland = mean(upland_prop),
+    median_upland = median(upland_prop),
+    q75_upland = quantile(upland_prop, 0.75),
+    q90_upland = quantile(upland_prop, 0.90),
+    q99_upland = quantile(upland_prop, 0.99)
+  )
+#challenges the simple narrative that uplands drive persecution
+
+#This is actually all evidence against a simple zero-inflated model. A zero-inflated model assumes the zeros come from a completely separate process.For example: Some grid squares can never have persecution because they are unsuitable. But your zero squares have: almost identical upland availability, similar urbanisation. They do not look like a clearly separate group. So at this stage I would lean towards NB. The zero-inflated model could still be tested later, but it should be justified.
+
+ggplot(grid10km_clean_all_poly) +
+  geom_sf(aes(fill = bird_count == 0)) +
+  theme_minimal()
+```
+
+```{r}
+skewness(grid10km_clean_all_poly$bird_count)
+```
+
+```{r}
+###frequency bar chart w scale_y_log10() + and more ft vibes
+ggplot(grid10km_clean_all_poly, aes(x = bird_count)) +
+  geom_bar(fill = "darkred", width = 0.8) +
+  geom_text(
+    stat = "count",
+    aes(label = after_stat(count)),
+    vjust = -0.3,
+    colour = "darkred",
+    family = "serif",
+    fontface = "bold",
+    size = 6
+  ) +
+  scale_x_continuous(breaks = 0:23) + #min:max
+  scale_y_log10() + ####could comment this out or not
+  labs(
+    x = "Birds Illegally Killed per 10 km grid square",
+    y = "Number of grid squares"
+  ) +
+  theme_minimal( #theme_classic, theme_minimal, theme_economist(
+    base_size = 15, base_family ="serif") + #text size and font
+  theme(
+    text = element_text(family = "serif"# times new roman
+                        #, face="bold"
+                        ), 
+    #minimalistic background FT
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    #minimalistic horizontal lines FT
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.y = element_line(color = "grey", size = 0.5),
+    #axis
+        axis.line.x = element_line(color = "#262a33", size = 0.6),
+    axis.ticks.x = element_line(color = "#262a33"),
+    axis.text = element_text(size = 15)
+  )
+```
+
+```{r}
+###frequency bar chart w scale_y_log10() + and more ft vibes
+ggplot(grid10km_clean_all_poly, aes(x = bird_count)) +
+  geom_bar(fill = "darkred", width = 0.8) +
+#  geom_text(
+#    stat = "count",
+#    aes(label = after_stat(count)),
+#    vjust = -0.3,
+#    colour = "darkred",
+#    family = "serif",
+#    fontface = "bold",
+#    size = 6
+#  ) +
+  scale_x_continuous(breaks = 0:23) + #min:max
+  scale_y_log10() + ####could comment this out or not
+  labs(
+    x = "Birds Illegally Killed per 10 km grid square",
+    y = "Number of grid squares"
+  ) +
+  theme_minimal( #theme_classic, theme_minimal, theme_economist(
+    base_size = 15, base_family ="serif") + #text size and font
+  theme(
+    text = element_text(family = "serif"# times new roman
+                        #, face="bold"
+                        ), 
+    #minimalistic background FT
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    #minimalistic horizontal lines FT
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.y = element_line(color = "grey", size = 0.5),
+    #axis
+        axis.line.x = element_line(color = "#262a33", size = 0.6),
+    axis.ticks.x = element_line(color = "#262a33"),
+    axis.text = element_text(size = 15)
+  )
+```
+
+```{r}
+#bird_count variable does not necessarily need transforming - Instead, justify the choice of Negative Binomial
+```
+
+```{r}
+##Built up /urban / rural
+summary(grid10km_clean_all_poly$built_up_mean)
+#Min=0, 1st Qu.=80.01,Median =194.52, Mean = 266.63, 3rd Qu.=356.89, Max=1703.53
+#mean being  larger than the median suggests strong positive skew
+#skewness(grid10km_clean_all_poly$built_up_mean) #1.660442
+#hist(grid10km_clean_all_poly$built_up_mean,breaks = 40)
+
+shapiro.test(sample(
+  grid10km_clean_all_poly$built_up_mean,
+  500))
+#Shapiro-Wilk normality test
+#data:  sample(grid10km_clean_all_poly$built_up_mean, 500)
+#W = 0.83577, p-value < 2.2e-16
+```
+
+```{r}
+#qqnorm(grid10km_clean_all_poly$built_up_mean)
+#qqline(grid10km_clean_all_poly$built_up_mean)
+```
+
+```{r}
+#hist(grid10km_clean_all_poly$built_up_log,
+#     breaks = 40) #a lot of 0s, followed by normal distribution
+skewness(grid10km_clean_all_poly$built_up_log) #-1.547312
+
+#qqnorm(grid10km_clean_all_poly$built_up_log)
+#qqline(grid10km_clean_all_poly$built_up_log)
+
+#The original built-up variable was strongly positively skewed. A log(x+1) transformation was therefore applied to reduce skewness and improve linearity between urbanisation and the response variable.
+```
+
+```{r}
+#Continuous built_up_log asks Does persecution change smoothly with urbanisation? Categorical built_up_class asks Are there thresholds between landscape types?
+#dont include both in same model, instead compare models AIC etc.
+```
+
+```{r}
+##Upland
+  
+hist(grid10km_clean_all_poly$upland_prop,breaks = 20)#alot of 0s very little of everything else, a few 1
+#continuous:: Does increasing upland coverage increase persecution??
+hist(grid10km_clean_all_poly$upland_binary,breaks = 2) #almost half and half
+#binary:: Does simply having upland present matter??
+#almost exactly equal groups - ideal
+table(grid10km_clean_all_poly$upland_binary)#0=1291,1=1322
+prop.table(table(grid10km_clean_all_poly$upland_binary))*100 #0=49.40681,1=50.59319
+skewness(grid10km_clean_all_poly$upland_prop) #0.9019379
+skewness(grid10km_clean_all_poly$upland_binary) #-0.02372919
+
+#because the distribution is very concentrated at 0 and 1 - also test whether a binary version is more appropriate: upland_binary -ecological question might actually be: Does the presence of upland habitat matter? rather than Does every additional 10% upland increase persecution?
+```
+
+```{r}
+ggplot(grid10km_clean_all_poly,
+       aes(x = upland_prop,
+           y = bird_count)) +
+  geom_jitter(width = 0.02, height = 0.1) +
+  theme_minimal()
+```
+
+```{r}
+#does upland actually relate to persecution counts?
+grid10km_clean_all_poly %>%
+  st_drop_geometry() %>%
+  group_by(upland_binary) %>%
+  summarise(
+    n = n(),
+    mean_bird_count = mean(bird_count),
+    median_bird_count = median(bird_count),
+    total_incidents = sum(bird_count),
+    zero_percent = mean(bird_count == 0)*100
+  )
+#                     no up/ up
+#mean incident counts 0.937/0.632=1.48 = upland grid squares have about 48% higher mean incident counts - in direction of hypothesis
+#total incidents 1239/(816+1239)×100 = 60.3% of all incidents - upland group contains a disproportionate share of incidents
+#zero% No upland: 67.4% zeros, Upland: 69.3% zeros - almost identical -- suggests Upland does not strongly determine whether persecution occurs at all, but it may influence the intensity/number of incidents where they occur
+#Upland may not create a completely separate "risk/no-risk" process. Instead, among all grid squares, upland may increase expected counts.
+#this further supports using a standard Negative Binomial rather than a zero-inflated model
+```
+
+```{r}
+grid10km_clean_all_poly %>%
+  st_drop_geometry() %>%
+  group_by(
+    upland_category = cut(
+      upland_prop,
+      breaks = c(-0.01, 0, 0.25, 0.5, 0.75, 1),
+      labels = c("none", "low", "medium", "high", "complete")
+    )
+  ) %>%
+  summarise(
+    n = n(),
+    mean_bird_count = mean(bird_count),
+    total_incidents = sum(bird_count)
+  )
+
+#fairly clear increase as upland proportion increases - important thing is that the relationship is not linear
+#Extensive upland landscapes are associated with increased bird persecution, but small patches of upland habitat still have a substantial amount of incidents.
+#could do an upland classification like built_up_class...
+```
+
+check **correlations** between predictors and bird_count
+
+```{r}
+# Select variables
+num <- grid10km_clean_all_poly |>
+  st_drop_geometry() |>
+  dplyr::select(
+    bird_count, #dependent variable
+      built_up_mean, #hypothesis: crimes are 
+      built_up_log, #logged version for distribution and interpretability
+      upland_prop, #hypothesis: crimes are more common in upland areas (mountains, moorlands and heathland) because many raptor persecution incidents are associated with grouse moors (proportion of 10km grid covered with upland)
+      upland_binary #binary version of whether upland is present at all in grid square (do not know to what extent without looking at upland_prop)
+  )
+
+# Spearman correlation matrix
+cor_matrix <- cor(
+  num,
+  method = "spearman", #spearman - not  linear - more flexible
+  use = "pairwise.complete.obs")
+
+# Function to calculate p-values
+cor.mtest <- function(mat, method = "spearman") {
+  mat <- as.matrix(mat)
+  n <- ncol(mat)
+  p.mat <- matrix(NA, n, n)
+  diag(p.mat) <- 0
+  for (i in 1:(n - 1)) {
+    for (j in (i + 1):n) {
+      tmp <- suppressWarnings(
+        cor.test(
+          mat[, i],
+          mat[, j],
+          method = method,
+          exact = FALSE ))
+      p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+    }
+  }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+
+# Calculate p-values
+p_matrix <- cor.mtest(num)
+
+
+```
+
+```{r}
+# Correlation plot 1 x
+corrplot::corrplot(
+  cor_matrix,
+  method = "color",
+  type = "upper",
+  order = "hclust",
+  addCoef.col = "black",
+  tl.col = "black",
+  tl.srt = 45,
+  p.mat = p_matrix,
+  sig.level = 0.05,
+  insig = "pch",      # mark insignificant correlations
+  pch = 4,            # ×
+  pch.col = "black",
+  pch.cex = 1.3)
+# Correlation plot 2 *
+corrplot::corrplot(
+  cor_matrix,
+  method = "number",
+  type = "upper",
+  order = "hclust",
+  tl.col = "black",
+  tl.srt = 45,
+  p.mat = p_matrix,
+  sig.level = c(0.001, 0.01, 0.05),
+  insig = "label_sig")
+
+#upland_prop/binary is not significantly correlated with bird_count - but could try interaction effects because it probably is in certain regions...this is an interesting finding though because lots of existing literature and policy changes are based on wildlife crimes association with upland grouse moorland management.
+
+#There is a moderate negative relationship between urbanisation and upland coverage — which is expected geographically.
+
+#At the bivariate level, nothing strongly explains bird crime — which is exactly why regression is needed (effects may only appear after controlling for other variables).
+```
+
+do **hierarchical**, urban, upland, interaction effects –also check multicollinearity with car::vif()
+
+```{r}
+grid10km_clean_all_poly$nuts1region   %>% table() #%>%mean() %>%round(., 2)
+#217.75 is the mean number of nested 10km grids within Region
+#East 216, East Midlands 157, London 15, North East 91, North West 157, Northern Ireland 151, Scotland 780, South East 217, South West 280, Wales 248, West Midlands 132, Yorkshire & The Humber 169
+
+hotspots <- 
+  grid10km_clean_all_poly %>%
+  dplyr::select(nuts1region, bird_count, county, city, upland_prop, upland_binary, built_up_class, built_up_mean) %>%
+  filter(bird_count > 15)
+hotspots[order(-hotspots$bird_count),]
+#top 10 within Scotland (6), Yorkshire (1), Wales (1), West Midlands (1) and South West (1)
+```
+
+```{r}
+#null model/ intercept-only model - useful as a baseline linear regression model, before introducing multilevel models
+eq0 <- bird_count ~ 1 #specify a model equation ~ 1 single intercept
+```
+
+```{r}
+#negative binomial null baseline model - bc response is a count and overdispersed
+model0nb <- glm.nb(
+  formula=eq0,
+  data=grid10km_clean_all_poly)
+summary(model0nb)
+summ(model0nb)
+#this model uses log link so the exp(-0.24022) = 0.7864548 which is the mean
+#exp(-0.24022)
+#"The expected bird count for a randomly selected 10 km grid square is 0.786 incidents"
+
+#Theta = 0.2727 small theta indicates substantial overdispersion - reinforces that a Negative Binomial model is more appropriate than a Poisson model
+
+#AIC=5933.6 compare this will later nb models - Lower AIC indicates a better balance between model fit and complexity
+#BIC = 5945.30 
+```
+
+```{r}
+#varying-intercept model with no explanatory variables
+#Every NUTS1 region has its own baseline level of bird persecution
+
+eq1 <- #specify model equation
+  bird_count ~ #dependant variable is modelled by...
+  1 + #intercept / mean baseline (model 0)
+  (1 | nuts1region) ##intercept represented by 1, varies by Region
+```
+
+```{r}
+model1nb <- glmer.nb( #multilevel modelling function
+  eq1, #bird count ~ 1 + (1 | Region) assigned above
+  data = grid10km_clean_all_poly) #covid data
+
+summary(model1nb) #estimates
+#Variance = 0.123
+#Std.Dev. = 0.351
+#estimated variation between regions - measurable regional variation - if variance close to zero, conclude NUTS1 contributes very little
+
+summ(model1nb) #ICC 0.03 - means that approximately 3% of the variation in bird counts is attributable to differences between NUTS1 regions, while the remaining 97% occurs between grid squares within regions - There is regional clustering but most of the variation is local
+
+#AIC = 5897.58, BIC = 5915.19
+#An AIC reduction of 36 from nb null is substantial - common rule of thumb  - suggests that allowing each region its own baseline improves the model considerably
+
+#est = -0.26
+#exp(-0.26) = 0.7710516 #average expected count is about 0.77 incidents per grid square - slightly lower than the 0.786 from the fixed-intercept model because the model is now partitioning some variation into the regional effects
+
+# Random-effect variance = 0.123
+# SD = 0.351
+# Indicates some variation in baseline persecution between NUTS1 regions
+
+# ICC = 0.03
+# Approximately 3% of variance is attributable to differences between NUTS1 regions
+
+# AIC = 5897.58
+# BIC = 5915.19
+
+# Model 0 AIC = 5933.57
+# ΔAIC = -35.99, indicating improved relative model fit
+# when regional variation is included
+```
+
+```{r}
+#varying-intercept model with 2+ explanatory variables
+eq2 <- # specify model equation
+  bird_count ~ #dependant variable is modelled by...
+  built_up_log + #explanatory variable 1 - urbanisation
+  upland_prop + #explanatory variable 2 - upland
+  (1 | nuts1region) #varies by region - each region has a baseline
+```
+
+```{r}
+#random-intercept Negative Binomial GLMM
+#varying-intercept model with 2+ explanatory variables
+eq2 <- # specify model equation
+  bird_count ~ #dependant variable is modelled by...
+  built_up_log + #explanatory variable 1 - urbanisation
+  upland_prop + #explanatory variable 2 - upland
+  (1 | nuts1region) #varies by region - each region has a baseline
+
+model2nb <- glmer.nb(#multilevel modelling function
+  eq2, #model equation assigned above
+  data = grid10km_clean_all_poly)#covid data
+
+vif(model2nb) #    1.048581 #fine? <2 = excellent - no evidence of multicollinearity between built_up_log and upland_prop - means the coefficient estimates are likely to be stable
+
+summary(model2nb)
+summ(model2nb) #ICC 0.01 - dropped - wouldn't place too much emphasis on the exact ICC value here
+
+#AIC: 5704.8 BIC: 5734.2
+#ΔAIC of nearly 193 is extremely strong evidence that adding built_up_log and upland_prop substantially improves the model
+
+#variance  = 0.14 increased slightly from 0.123 - means the fixed effects do not explain away the regional differences - there is still unexplained variation between NUTS1 regions after accounting for urbanisation and upland cover - suggests there may be other regional-level factors (e.g. land management, reporting effort, policy, species composition) contributing to persecution patterns
+
+#!remember! in a negative binomial model, estimates are on the log scale so need to exp()
+
+#coefficients
+#built_up_log exp(0.44122) = 1.554603 means A one-unit increase in built_up_log is associated with approximately a 55% increase in the expected bird persecution count. From an ecological perspective, this suggests that, after accounting for upland cover and regional differences, more urbanised or accessible areas have higher recorded persecution counts. explanations... higher detection/reporting in accessible areas, persecution occurring around lowland agricultural or peri-urban landscapes, built_up_mean acting as a proxy for accessibility rather than urban land cover.
+#exp(0.44122)
+#upland_prop  exp(1.08629) = 2.96326 means A fully upland grid square is estimated to have almost three times (x296%) the expected persecution count of a grid square with no upland, all else being equal- substantial effect and aligns with hypothesis
+#exp(1.08629)
+#coefficients are effect sizes are ecologically substantial and meaningful, as aswell as statistically significant (p<<2e-16)
+```
+
+```{r}
+#THIS
+#NB version caterpillar plots
+cat1 <- plotREsim(#plot random effects simulator as a caterpillar plot
+  REsim(#Random Effects simulator (varying intercepts and uncertainty)
+    model1nb)) + #model 1
+  ggtitle("Model 1: Random Intercepts") #title
+cat2 <- plotREsim(#plot random effects simulator as a caterpillar plot
+  REsim(#Random Effects simulator (varying intercepts and uncertainty)
+    model2nb)) + #model 2
+  ggtitle("Model 2: Random Intercepts")#title
+caterpillar_plot <- (cat1 | cat2) + #patchwork model1 and model2
+ plot_annotation(title = "Caterpillar Plots")+ #add figure title
+  plot_layout(widths = c(1, 1)) &#balanced
+  theme(plot.title = element_text(hjust = 0.5))#centre title
+caterpillar_plot #figure 1
+
+#investigate order of regions in caterpillar plots for write up
+re_model1nb <- REsim(model1nb)%>%
+  arrange(mean)  # sort smallest to largest
+#re_model1nb
+view(re_model1nb) #south east,south west ---> yorkshire & the humber
+re_model2nb <- REsim(model2nb)%>%
+  arrange(mean)  # sort smallest to largest
+#re_mode21nb
+#view(re_model2nb)#south east wales ---> yorkshire & the humber
+
+#The varying intercepts and confidence intervals (CIs) reveal some differences across the 12 regions. 
+#the regional intercepts represent the deviation of each NUTS1 region's baseline persecution rate from the overall UK average
+#In Model 1, Yorkshire & The Humber displays the highest intercept (0.70), indicating statistically significantly more birds illegally killed than the overall average [this is a dodgy way of describing - check this]. South East displays the lowest intercept (-0.55521259), followed by south west (-0.36515196) indicating statistically significantly less birds are illegally killed than the overeall average. From the twelve regions, 9 () CIs cross zero, suggesting they are not significantly different from overall average.
+#Model 2 tells a similar story with slightly different values and order Y&H (0.614487), NI (0.4895453e), SE(-0.5064032), wales(-0.3904800)
+
+#The random effects changed because Model 2 is no longer trying to explain all regional differences using region alone. Once you add built_up_log and upland_prop, the model reallocates variation: some of what looked like a regional effect in Model 1 is now explained by differences in urbanisation and upland coverage between regions.
+#Model 2 asks After accounting for urbanisation and upland proportion, does this region still have a higher/lower baseline persecution rate than expected?
+
+#the largest shift between model 1 (-0.017) and 2 (+0.490) is in northern ireland  - A possible interpretation: Northern Ireland has relatively low predicted counts based on its upland and urban characteristics, but the observed counts are higher than the model expects.
+#wales becomes more negative (model 1: -0.168, model 2: -0.390) statistically signif - After accounting for upland and urbanisation wales has fewer incidents than expected given its landscape characteristics -The model expects more persecution because of its upland proportion, but the observed counts are lower 
+#south west becomes non sig (model 1: -0.365, model 2: -0.159) Some of the lower persecution in South West England was explained by its landscape characteristics - Once those are included, it is closer to average.
+#y&h (0.699 → 0.614) and SE (-0.555 → -0.506) stay similar and remain extremes
+#Yorkshire & Humber has unusually high persecution even after controlling for upland and built-up.South East has unusually low persecution even after controlling for those variables. - robust regional effects
+
+#The extremes become slightly less extreme - This is expected because adding predictors explains some variation that previously belonged to the regional intercept.- This is called partial pooling/shrinkage.
+
+#The caterpillar plot is showing whether the regional deviation from the overall intercept is distinguishable from zero.
+#"Yorkshire & The Humber showed the largest positive regional deviation, whereas the South East showed the largest negative deviation. Most regional estimates overlapped zero, suggesting limited evidence that their baseline persecution rates differed from the UK average after accounting for uncertainty."
+ranef(model2nb, condVar = TRUE)
+dotplot(ranef(model2nb, condVar = TRUE))
+```
+
+```{r}
+#varying slopes?
+
+#Scatter Plots 
+regions12 <- grid10km_clean_all_poly %>% dplyr::filter( #select all Regions to vary relationship by
+    as.character(nuts1region) %in% c(
+      "North East", 
+      "North West", 
+      "Yorkshire & The Humber", 
+      "East Midlands", 
+      "West Midlands", 
+      "South West", 
+      "East", 
+      "South East",
+      "London",
+      "Scotland",
+      "Wales",
+      "Northern Ireland"))
+UPLANDscatter <- ggplot(regions12, #IMD linear scatter plot by region
+       aes(
+         x = upland_prop, #x axis
+         y = bird_count)) + #y axis
+  geom_point() + #data points
+  geom_smooth(method = "lm") +#straight best-fit line using linear regression
+  facet_wrap(~ nuts1region, nrow = 2) +#separate panels over 2 rows for each Region
+  ylab("Bird Kill") + #x label
+  xlab("Upland proportion") +#y label
+  theme_classic() #simple background
+URBANscatter <- ggplot(regions12, #WFH linear scatter plot by region
+       aes(
+         x = built_up_mean, #x axis
+         y = bird_count)) + #y axis
+  geom_point() + #data points
+  geom_smooth(method = "lm") +#straight best-fit line using linear regression
+  facet_wrap(~ nuts1region, nrow = 2) +#separate panels over 2 rows for each Region
+  ylab("Bird Kill") + #x label
+  xlab("Urban") +#y label
+  theme_classic()#simple background
+URBANLOGscatter <- ggplot(regions12, #WFH linear scatter plot by region
+       aes(
+         x = built_up_log, #x axis
+         y = bird_count)) + #y axis
+  geom_point() + #data points
+  geom_smooth(method = "lm") +#straight best-fit line using linear regression
+  facet_wrap(~ nuts1region, nrow = 2) +#separate panels over 2 rows for each Region
+  ylab("Bird Kill") + #x label
+  xlab("Urban log") +#y label
+  theme_classic()#simple background
+UPLANDscatter #uncomment to return linear scatters
+URBANscatter 
+URBANLOGscatter 
+#ummmm no massively clear patterns...
+#actually slight differences like urban pos relationship w wales + scot, neg with yorkshire
+```
+
+```{r}
+#Fit a varying-slope model
+eq3 <- # specify a model equation
+  bird_count ~ #dependant variable is modelled by...
+  built_up_log + #explanatory variable 1
+  upland_prop+#explanatory variable 2
+  (0 + built_up_log | nuts1region) #varying slope NOT varying intercept
+```
+
+```{r}
+#Fit a varying intercept & varying slope model
+eq4 <- #specify a model equation
+  bird_count ~ #dependant variable is modelled by...
+  built_up_log + #explanatory variable 1
+  upland_prop+#explanatory variable 2
+  (1 + #varying intercept 
+     built_up_log | nuts1region) #& varying slope
+```
+
+```{r}
+#"Do the relationships between landscape variables and persecution differ between regions?" - effect of urban or upland may be stronger in some regions than others
+eq4up <- #specify a model equation
+  bird_count ~ #dependant variable is modelled by...
+  built_up_log + #explanatory variable 1
+  upland_prop+#explanatory variable 2
+  (1 + #varying intercept 
+     upland_prop | nuts1region) #& varying slope
+
+eq4urb <- #specify a model equation
+  bird_count ~ #dependant variable is modelled by...
+  built_up_log + #explanatory variable 1
+  upland_prop+#explanatory variable 2
+  (1 + #varying intercept 
+     built_up_log | nuts1region) #& varying slope
+
+#nb version of varying intercept and varying slope ()
+model4nbup <- glmer.nb(#multilevel modelling function
+  eq4up, #model equation assigned above
+  data = grid10km_clean_all_poly)#covid data
+
+model4nburb <- glmer.nb(#multilevel modelling function
+  eq4urb, #model equation assigned above
+  data = grid10km_clean_all_poly)#covid data
+
+
+summary(model4nbup) #estimates
+#AIC=5705.9 <2 difference from model 2 -extra complexity of allowing upland effects to vary by region is not supported by AIC
+#fixed effects remained very similar to model 2s
+#variance = 0.268 suggests there is some variation in upland effects between regions
+
+summary(model4nburb) #estimates
+# AIC= 5700.6 best so far
+#fixed effects remained positive and almost identical - stable
+#random effects = 1.27 intercept variance - huge increase -Once regions are allowed to have different urbanisation effects, there is much more unexplained regional baseline variation.
+#but built_up_log variance = 0.022 tiny - The slope variation is actually small -The big increase is in the intercept variance.
+
+
+summ(model4nbup) #VPC
+summ(model4nburb)
+```
+
+```{r}
+#anova <- #Analysis of Variance
+#  anova(model1, #varying intecept no variables
+#        model2, #varying intercept 2 variables ###best?
+#        model3, #varying slope upland/urban
+#        model4) #varying intercept and varying slope
+#anova
+#table1 <- knitr::kable(anova, 
+#             digits = 3,
+#             caption = "Model Comparison (ANOVA)")
+#table1
+```
+
+```{r}
+AIC(model0nb, model1nb, model2nb, model4nburb, model4nbup)
+#model2nb is best so far (4nburb is ever so slightly better but only marginally)
+#AIC = 5704.820
+#simple
+#stable coefficients
+#interpretable
+#random effect justified
+#avoids overfitting
+```
+
+```{r}
+#try categorical built_up urbanisation measurement
+eq2.2 <- # specify model equation
+  bird_count ~ #dependant variable is modelled by...
+  built_up_class + #explanatory variable 1 - urbanisation ######
+  upland_prop + #explanatory variable 2 - upland
+  (1 | nuts1region) #varies by region - each region has a baseline
+
+model2.2nb <- glmer.nb(#multilevel modelling function
+  eq2.2, #model equation assigned above
+  data = grid10km_clean_all_poly)#covid data
+
+summary(model2.2nb)
+#AIC = 5691.4 -- 13.4 meaningful improvement >10 strong support
+#according to AIC: The categorical representation of urbanisation provides substantially better model fit than the continuous logged version - suggests the relationship between urbanisation and persecution may not be a simple linear gradient - makes sense because why would a more urban grid have more bird kills - thought it would be more rural
+
+#dummy reference variable category in VERY RURAL - Everything else is compared against very rural grid squares - this is very important
+#exp(2.7259) = 0.0655 is the baseline expected persecution rate for a very rural grid square with zero upland proportion, in the average NUTS1 region
+#!remember! gotta exp() the estimates
+#Rural grid squares have approximately 2.7 times higher expected persecution counts than very rural grid squares, holding upland and region constant.
+#Semi-rural areas have approximately 9 times higher expected persecution counts than very rural areas.
+#Semi-urban areas have approximately 13 times higher expected persecution counts than very rural areas.
+#Urban grid squares have approximately 10.6 times higher expected persecution counts than very rural areas.
+#Very urban areas have approximately 5.5 times higher expected persecution counts than very rural areas.
+
+#Very rural       1×
+#Rural            2.7×
+#Semi-rural       9.4×
+#Semi-urban       12.7×
+#Urban            10.6×
+#Very urban       5.5×
+#This is not a straight line. It looks like: increase → peak → decline
+#relationship appears strongest in semi-rural/semi-urban landscapes - a very interesting ecological result.
+#Persecution may be highest in intermediate landscapes where rural land uses and human accessibility overlap.
+#Possible explanations (as hypotheses): peri-urban agricultural landscapes, increased accessibility and detectability, edge habitats, land-use mosaics, human activity around managed landscapes
+
+#A grid square moving from 0% to 100% upland cover is associated with approximately 2.5 times higher expected persecution counts, after accounting for urbanisation category and region. The effect has reduced slightly from continuous model 2 because some of what upland was explaining previously is now captured by the urbanisation classes - But it remains strongly positive.
+
+#random effect nuts1region variance = 0.120 (v similar to model2:0.140) - Regional differences remain after accounting for urbanisation category and upland cover - the model still supports including NUTS1 as a random intercept.
+
+#all... coefficient estimates are statistically significant ***
+
+#vif(model2.2nb)
+#                   GVIF Df GVIF^(1/(2*Df))
+#built_up_class 1.128506  5        1.012163
+#upland_prop    1.128506  1        1.062311
+#Anything close to 1 indicates essentially no multicollinearity #good - can confidently say that the estimated effects of urbanisation category and upland proportion are statistically independent
+
+#Model 2.2 advantages: substantially better fit, reveals a non-linear relationship, ecologically more interesting, suggests threshold effects
+
+table(grid10km_clean_all_poly$built_up_class)
+#very rural      rural semi-rural semi-urban      urban very urban 
+#       268        244       1034        838        186         43 
+#reasonably balanced
+
+anova(model1nb, model2nb, model2.2nb)
+#model2 χ² = 196.8, df = 2, p < 2.2 × 10⁻¹⁶ #Adding built-up and upland dramatically improves the model from 1nb obvs
+#model2.2nb χ² = 21.39, df = 4, p = 0.00026 #replacing the continuous urbanisation variable with a categorical representation improves model fit - even after paying the penalty for four additional parameters, the categorical model fits significantly better.
+#The categorical model improves AIC by 13.4, which is generally considered strong evidence in its favour
+#BIC (Bayesian Information Criterion) is similar to AIC, but it penalises model complexity more heavily, which is why it preferes model 2 over 2.2
+
+#model2.2bn is the best because it has the lowest AIC, it significantly improves fit over the continuous version, it has no multicollinearity issues, the categories are reasonably well represented, and it uncovers a non-linear relationship that would have been hidden by a continuous predictor. The only caution is the very urban category (n = 43), so I'd avoid over-interpreting that single coefficient.
+
+#For mixed models, you don't use the ordinary R² from linear regression - instead use Nakagawa's R²
+
+
+r2(model2.2nb) #library(performance)
+#     Marginal R2: 0.276 #how much built-up class + upland explain - Approximately 27.6% of the variation in bird persecution counts is explained by urbanisation class and upland proportion - For an ecological negative binomial mixed model, 28% is a respectable amount of explained variation
+#  Conditional R2: 0.327 #how much the entire model explains once regional differences are included - The full model explains approximately 32.7% of the variation in bird persecution counts.
+#So roughly 5 percentage points of additional variation are explained by allowing each NUTS1 region to have its own baseline. - Most of the explanatory power comes from your landscape variables.
+#0.327 is decent because Illegal persecution of birds of prey behaviour is influenced by many factors you don't (and often can't) measure: individual estates,gamekeeper behaviour,land ownership,species distributions,reporting effort,police investigations,chance events,local policies,public access,weather,observer bias.
+#rule of thumb For ecological GLMMs:<0.1 → weak, 0.1–0.3 → moderate, 0.3–0.5 → good, >0.5 → unusually high for observational ecology - Your conditional R² of 0.327 sits comfortably in what I'd describe as good explanatory power for an observational ecological dataset.
+```
+
+```{r}
+vif(model2.2nb)
+```
+
+```{r}
+r2(model0nb) 
+r2(model1nb) 
+r2(model2nb) 
+r2(model2.2nb)
+```
+
+```{r}
+pred <- ggpredict(model2.2nb, terms = "built_up_class")
+#plot(pred)
+```
+
+```{r}
+#double check using a zero-inflated model
+#restart r
+#install.packages("reformulas")
+#packageVersion("reformulas")
+#library(glmmTMB)
+
+#equivalent negative binomial model - current best model recreated in glmmTMB
+model2.2_tmb <- glmmTMB(
+  bird_count ~ built_up_class +
+    upland_prop +
+    (1 | nuts1region),
+  family = nbinom2,
+  data = grid10km_clean_all_poly)
+summary(model2.2_tmb) #AIC 5691
+
+#zero-inflated negative binomial model
+model2.2_zi <- glmmTMB(
+  bird_count ~ built_up_class +
+    upland_prop +
+    (1 | nuts1region),
+  ziformula = ~1,
+  family = nbinom2,
+  data = grid10km_clean_all_poly)
+summary(model2.2_zi) #AIC 5693.4   
+
+AIC(
+  model2.2_tmb, #df 9
+  model2.2_zi #df10
+)
+
+anova(
+  model2.2_tmb,
+  model2.2_zi
+)
+
+#the negative binomial model is preferred over the zero-inflated version
+#The zero-inflated model: has one extra parameter, has higher AIC, has higher BIC, has exactly the same likelihood
+#Adding the zero-inflation component did not improve model fit at all -the extra parameter bought you nothing bc the negative binomial distribution already explains the zeros adequately
+
+#2Although 68.3% of grid cells recorded zero persecution incidents, a zero-inflated negative binomial model was evaluated due to the high frequency of zeros. However, the zero-inflated model did not improve model fit (ΔAIC = +2.0; likelihood ratio test: χ² = 0, p = 1), therefore the standard negative binomial mixed-effects model was retained."
+
+#1786 / 2613 grid squares = 68.3% zeros :/ But a high number of zeros does not automatically mean zero-inflation is required. my results suggest The absence of recorded persecution is part of the same underlying process generating the observed counts, rather than representing a separate group of fundamentally different locations.In other words... a grid square with zero incidents is not necessarily a "non-persecution" landscape. It may simply be a low-probability outcome from the same spatial process.
+```
+
+```{r}
+#checking if upland_binary is better than upland_prop
+# categorical urbanisation + binary upland presence
+eq2.3 <- 
+  bird_count ~ 
+  built_up_class + 
+  upland_binary +
+  (1 | nuts1region)
+
+model2.3nb <- glmer.nb(
+  eq2.3,
+  data = grid10km_clean_all_poly
+)
+
+summary(model2.3nb)
+
+anova(
+  model2.2nb,
+  model2.3nb
+)
+
+#Is presence/absence of upland enough, or does the amount of upland within a grid square matter? results strongly favour upland proportion (upland_prop) over upland binary (upland_binary).
+#ΔAIC = 23.8, ΔBIC = 23.8 worse with binary
+#The amount of upland cover provides substantially more explanatory information than simply whether upland exists.
+#why? Ecologically, 0.1 and 1. upland these are very different landscapes, but the binary model throws away that information.
+#coefficient interpretation: exp(0.5808) ≈ 1.79 Grid squares containing any upland have approximately 79% higher expected persecution counts compared with grid squares without upland, holding urbanisation constant. however upland_prop: A grid square moving from 0 to 100% upland would be expected to have approximately 2.5 times the persecution count, which More importantly, _prop variable captures the gradient.
+#"The proportion of upland habitat within a grid cell was a better predictor of persecution intensity than simply the presence or absence of upland habitat, suggesting that persecution risk increases along a gradient of upland dominance rather than being associated only with upland occurrence." - This fits your original hypothesis about grouse moor landscapes much better too — a grid square with a tiny corner of upland is not equivalent to a predominantly upland landscape.
+```
+
+```{r}
+#bird_of_prey_clean_poly
+```
+
+Where are bird persecutions more likely to occur? spatial drivers - answered with model 2.2nb \^\^
+
+```         
+model2.2nb: bird_count ~ built_up_class + upland_prop + (1 | nuts1region)
+```
+
+talk in write up about about coefficients, regional hierachy, p values of statistical significance, AIC, BIC, r2 etc.
+
+```{r}
+###publication standard model tables for word
+
+```
+
+### Modelling Time and Policy
+
+##### EDA
+
+How has persecution changed over time? temporal patterns
+
+national yearly trend, incident type (carbofuran became illegal 2001 tho so before this data), intervention analysis - did a policy change alter a trend - and for how long?
+
+```{r}
+#exploratory data analysis EDA
+#species yearly trends stacked bar chart - my study considers all species together
+#summary table of species count per year
+species_year <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%        # geometry isn't needed for plotting
+  group_by(date_year, species) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+#stacked bar chart
+ggplot(species_year,
+       aes(x = date_year,
+           y = birds,
+           fill = species)) +
+  geom_col()
+#could probs change colours to make it more interpretable
+#very obviously mainly buzzard, probs followed by red kite and peregrine falcon
+#there are so many different species so maybe best to group them all together for this particular national analysis
+```
+
+```{r}
+#nuts1region yearly trends stacked bar chart
+#first make a summary table of nuts1region count per year
+region_year <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%        # geometry isn't needed for plotting
+  group_by(date_year, nuts1region) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+#stacked bar chart
+ggplot(region_year,
+       aes(x = date_year,
+           y = birds,
+           fill = nuts1region)) +
+  geom_col()
+#mainly scotland, within england mainly yorkshire and humber - clear in regression and previous analysis
+```
+
+```{r}
+#upland_binary yearly trends stacked bar chart
+#first make a summary table of upland_binary count per year
+upland_year <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%        # geometry isn't needed for plotting
+  group_by(date_year, upland_binary) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+#stacked bar chart
+ggplot(upland_year,
+       aes(x = date_year,
+           y = birds,
+           fill = upland_binary)) +
+  geom_col()
+#needs to be dodged to see if upland binary 1 and 0 follow a similar pattern
+ggplot(upland_year,
+       aes(x = date_year,
+           y = birds,
+           fill = factor(upland_binary))) +
+  geom_col(position = "dodge")
+```
+
+```{r}
+#figure 3...
+#ENGLAND AT TOP
+#country yearly trends stacked bar chart
+#first make a summary table of country count per year
+bird_of_prey_clean_poly$Country <- factor( #convert column into factor and manually specify level order
+  bird_of_prey_clean_poly$Country, levels = c(
+    "England", "Scotland", "Wales", #GB
+    "Northern Ireland"))#northern ireland 
+country_year <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%        # geometry isn't needed for plotting
+  group_by(date_year, Country) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+#stacked bar chart
+country_colours <- c(
+  "England"          = "#F78C88", #interpretive flag colours
+  "Scotland"         = "#88B8F7",
+  "Wales"            = "#F7EC88",
+  "Northern Ireland" = "#9DD971"
+)
+ggplot(country_year,
+       aes(x = date_year,
+           y = birds,
+           fill = Country)) +
+  geom_col(#position = "dodge" #1 bar each country
+    #position = "fill" #all =100%
+    )+
+  scale_fill_manual(values = country_colours) +
+  scale_x_date(
+  date_breaks = "1 year",
+  date_labels = 
+    "%y"  #2 digits 
+   #"%Y" #4 digits
+  )+
+  theme_minimal()+
+#  theme(
+#  axis.text.x = element_text(
+#    angle = 90,#rotate label vertically #90, 45
+#    vjust = 0.5,#middle
+#    hjust = 1
+#  )
+#)+
+  theme(
+  panel.grid.major.x = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.grid.major.y = element_line(
+    colour = "grey85", #thin grey background lines
+    linewidth = 0.3
+  )
+)+
+  theme(
+  text = element_text(
+    family = "serif", #bold times new roman font
+    face = "bold"
+  )
+)+
+  labs(
+  x = "Year",
+  y = "Number of birds illegally killed",
+  fill = "Country"
+)
+```
+
+```{r}
+#SCOTLAND AT TOP makes more sense geographically and looking at it top is north
+#country yearly trends stacked bar chart
+#first make a summary table of country count per year
+bird_of_prey_clean_poly$Country <- factor( #convert column into factor and manually specify level order
+  bird_of_prey_clean_poly$Country, levels = c(
+    "Scotland", "England", "Wales", #GB
+    "Northern Ireland"))#northern ireland 
+country_year <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%        # geometry isn't needed for plotting
+  group_by(date_year, Country) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+#stacked bar chart
+country_colours <- c(
+  "Scotland"         = "#88B8F7",
+  "England"          = "#F78C88", #interpretive flag colours
+  "Wales"            = "#F7EC88",
+  "Northern Ireland" = "#9DD971"
+)
+ggplot(country_year,
+       aes(x = date_year,
+           y = birds,
+           fill = Country)) +
+  geom_col(#position = "dodge" #1 bar each country
+    #position = "fill" #all =100%
+    )+
+  scale_fill_manual(values = country_colours) +
+  scale_x_date(
+  date_breaks = "1 year",
+  date_labels = 
+    "%y"  #2 digits 
+   #"%Y" #4 digits
+  )+
+  theme_minimal()+
+#  theme(
+#  axis.text.x = element_text(
+#    angle = 90,#rotate label vertically #90, 45
+#    vjust = 0.5,#middle
+#    hjust = 1
+#  )
+#)+
+  theme(
+  panel.grid.major.x = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.grid.major.y = element_line(
+    colour = "grey85", #thin grey background lines
+    linewidth = 0.3
+  )
+)+
+  theme(
+  text = element_text(
+    family = "serif", #bold times new roman font
+    face = "bold"
+  )
+)+
+  labs(
+  x = "Year",
+  y = "Number of birds illegally killed",
+  fill = "Country"
+)
+```
+
+e.g. did percecution of hen harriers (and others) chane after Action Plans? Did Scotland react differently than England? Has persecution in upland areas changed differently over time than non-upland areas?--maybe crimes in upland areas went down while crimes in less/ no upland area went up?The Hen Harrier Action Plan uses a mix of strict policing, satellite tracking, and compromise-based land management to eliminate this motive and enforce the Wildlife and Countryside Act 1981. Vicarious liability?
+
+```{r}
+#month frequency histogram
+month_summary <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%
+  filter(!is.na(Month)) %>%      # Remove NAs
+  group_by(Month) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+month_summary$Month <- factor(#order as chronalogical factor
+  month_summary$Month,
+  levels = c(
+    "January", "February", "March", "April",
+    "May", "June", "July", "August",
+    "September", "October", "November", "December"
+  ),
+  labels = c( #tidy x axis
+    "Jan", "Feb", "Mar", "Apr",
+    "May", "Jun", "Jul", "Aug",
+    "Sep", "Oct", "Nov", "Dec"
+  )
+)
+
+ggplot(month_summary,
+       aes(x = Month, y = birds)) +
+  geom_col()+
+  theme_minimal()
+#The first peak in April coincides with the breeding season for many UK raptors
+#birds are defending territories and are highly visible,adults are tied to nests,breeding pairs become predictable in their locations,persecution may be aimed at preventing successful breeding before gamebird chicks are released.Species such as Buzzards, Red Kites, Goshawks and Peregrine Falcons are all breeding around this period.
+#the rise to the second peak aligns well with the driven grouse shooting season (glorious twelth: 12th August)
+#detection bias is an important consideration - detection is likely to vary seasonally - spring brings more walkers, birdwatchers and surveyors into the countryside, breeding monitoring is underway, autumn has increased shooting activity and more people working on estates.Winter may simply have fewer opportunities for carcasses to be found.
+#NOT JUST GROUSE - Many incidents occur on farmland rather than grouse moors. Spring and autumn are periods of increased agricultural activity:livestock turnout,lambing,(gamebird management),crop management.More people working outdoors means both more opportunities for persecution and more opportunities for discoveries.
+```
+
+```{r}
+#month histogram stacked with upland 
+month_summary_upland <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%
+  filter(!is.na(Month)) %>%
+  group_by(Month, upland_binary) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Month = factor(
+      Month,
+      levels = c(
+        "January", "February", "March", "April",
+        "May", "June", "July", "August",
+        "September", "October", "November", "December"
+      ),
+      labels = c(
+        "Jan", "Feb", "Mar", "Apr",
+        "May", "Jun", "Jul", "Aug",
+        "Sep", "Oct", "Nov", "Dec"
+      )
+    ),
+    upland_binary = factor(
+      upland_binary,
+      levels = c(0, 1),
+      labels = c("Non-upland", "Upland")
+    )
+  )
+
+ggplot(month_summary_upland,
+       aes(x = Month,
+           y = birds,
+           fill = upland_binary)) +
+  geom_col(position="dodge") +
+  labs(
+    x = "Month",
+    y = "Total birds killed",
+    fill = "Grid square"
+  ) +
+  theme_minimal()
+#the seasonal pattern appears to be broadly consistent regardless of whether persecution occurs in upland or non-upland grid squares. That suggests there may be common drivers acting across the UK, rather than a process unique to grouse moors.
+#Both groups show:Low levels in winter (Jan–Feb),Rapid increase into spring, A trough around June–July, A second peak in early autumn,Decline into winter
+```
+
+```{r}
+#month histogram stacked with  incident type 
+#what type of persecution is driving the seasonal pattern?
+incident_month <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%
+  filter(!is.na(Month),
+         !is.na(incident_type)) %>%
+  group_by(Month, incident_type) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+incident_month$Month <- factor(
+  incident_month$Month,
+  levels = c(
+    "January", "February", "March", "April",
+    "May", "June", "July", "August",
+    "September", "October", "November", "December"
+  ),
+  labels = c(
+    "Jan", "Feb", "Mar", "Apr",
+    "May", "Jun", "Jul", "Aug",
+    "Sep", "Oct", "Nov", "Dec"
+  )
+)
+ggplot(incident_month,
+       aes(x = Month,
+           y = birds,
+           fill = incident_type)) +
+  geom_col() +
+  labs(
+    x = "Month",
+    y = "Total birds killed",
+    fill = "Incident type"
+  ) +
+  theme_minimal()
+table(bird_of_prey_clean_poly$incident_type)
+#=1875 incidents
+sum(incident_month$birds)#2035 = 2055 - nas
+```
+
+```{r}
+#monthly histogram stacked with region
+region_month <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%
+  filter(!is.na(Month),
+         !is.na(nuts1region)) %>%
+  group_by(Month, nuts1region) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+
+# order months chronologically
+region_month$Month <- factor(
+  region_month$Month,
+  levels = c(
+    "January", "February", "March", "April",
+    "May", "June", "July", "August",
+    "September", "October", "November", "December"
+  ),
+  labels = c(
+    "Jan", "Feb", "Mar", "Apr",
+    "May", "Jun", "Jul", "Aug",
+    "Sep", "Oct", "Nov", "Dec"
+  )
+)
+
+# stacked bar chart
+ggplot(region_month,
+       aes(x = Month,
+           y = birds,
+           fill = nuts1region)) +
+  geom_col() +
+  labs(
+    x = "Month",
+    y = "Total birds killed",
+    fill = "Region"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#monthly histogram stacked with upland_binary
+upland_month <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%
+  filter(!is.na(Month),
+         !is.na(upland_binary)) %>%
+  group_by(Month, upland_binary) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  ) %>% ####
+  group_by(Month) %>% 
+  mutate(pct = birds / sum(birds)) %>% 
+  ungroup()
+
+# order months chronologically
+upland_month$Month <- factor(
+  upland_month$Month,
+  levels = c(
+    "January", "February", "March", "April",
+    "May", "June", "July", "August",
+    "September", "October", "November", "December"
+  ),
+  labels = c(
+    "Jan", "Feb", "Mar", "Apr",
+    "May", "Jun", "Jul", "Aug",
+    "Sep", "Oct", "Nov", "Dec"
+  )
+)
+
+# stacked bar chart
+ggplot(upland_month,
+       aes(x = Month,
+           y = birds,
+           fill = upland_binary)) +
+  geom_col() +
+    geom_text(aes(#% labels for writeup
+      label = scales::percent(pct, accuracy = 1)), 
+            position = position_stack(vjust = 0.5),
+            size = 3,
+            color = "white") +
+  labs(
+    x = "Month",
+    y = "Total birds killed",
+    fill = "Upland"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+monthly_summary <- upland_month %>%
+  group_by(Month) %>%
+  summarise(
+    total_birds = sum(birds, na.rm = TRUE),
+    upland_birds = sum(birds[upland_binary == 1], na.rm = TRUE),
+    non_upland_birds = sum(birds[upland_binary == 0], na.rm = TRUE),
+    upland_percent = sum(birds[upland_binary == 1], na.rm = TRUE) /
+                     sum(birds, na.rm = TRUE) * 100,
+    non_upland_percent = sum(birds[upland_binary == 0], na.rm = TRUE) /
+                         sum(birds, na.rm = TRUE) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(Month)
+
+#monthly_summary
+#view(monthly_summary)
+
+overall_upland <- upland_month %>%
+  group_by(upland_binary) %>%
+  summarise(
+    total_birds = sum(birds, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    percent = total_birds / sum(total_birds) * 100
+  )
+
+#overall_upland
+```
+
+```{r}
+##month histogram stacked with species
+# monthly histogram stacked by species
+# what species are driving the seasonal pattern?
+
+species_month <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%
+  filter(!is.na(Month),
+         !is.na(species)) %>%
+  group_by(Month, species) %>%
+  summarise(
+    birds = sum(count),
+    .groups = "drop"
+  )
+
+# order months chronologically
+species_month$Month <- factor(
+  species_month$Month,
+  levels = c(
+    "January", "February", "March", "April",
+    "May", "June", "July", "August",
+    "September", "October", "November", "December"
+  ),
+  labels = c(
+    "Jan", "Feb", "Mar", "Apr",
+    "May", "Jun", "Jul", "Aug",
+    "Sep", "Oct", "Nov", "Dec"
+  )
+)
+
+# stacked bar chart
+ggplot(species_month,
+       aes(x = Month,
+           y = birds,
+           fill = species)) +
+  geom_col() +
+  labs(
+    x = "Month",
+    y = "Total birds killed",
+    fill = "Species"
+  ) +
+  theme_minimal()
+#Buzzards represented a consistently high proportion of recorded persecution across all months, suggesting that their contribution reflects their widespread distribution and frequent occurrence in human-dominated landscapes rather than a strongly seasonal persecution pattern."
+#The concentration of Peregrine Falcon persecution during the breeding period suggests that seasonal vulnerability may be linked to territorial behaviour and nest site activity
+ggplot(species_month,
+       aes(x = Month,
+           y = birds)) +
+  geom_col() +
+  facet_wrap(~ species)
+#buzzard, gos hawk, hen harrier, red kit: bimodal pattern <-- bimodel  = 2 modes
+#perergrine falcon april spike, rest have very little data to find a clear pattern
+```
+
+```{r}
+#incident type frequency
+incident_type_summary <- bird_of_prey_clean_poly %>%
+  st_drop_geometry() %>%
+  group_by(incident_type) %>%
+  summarise(
+    total_birds = sum(count),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_birds))
+
+incident_type_summary
+#
+#incident_type    total_birds
+#Poisoning	      787			
+#Shooting     	  740			
+#Trapping       	306			
+#Persecution (Other)	166			
+#Nest Destruction   	56	
+```
+
+#### More EDA
+
+```{r}
+#before python clean
+#getwd()
+rspb_pre_clean <- read_sf("..\\data\\data_downloads\\geojsnConfirmed_Raptor_Persecution_Incidents_v2_(Public)__3225827772385794554.geojson")
+#view(rspb_pre_clean) # just to get total number of incidents
+```
+
+```{r}
+#str(bird_of_prey_clean_poly) #rspb data after python clean
+##EDA
+#total number of incidents: 1,810 incidents - some included >1 bird per incident - range: 1-
+#view(rspb_pre_clean)
+#total number of birds killed:2055
+#sum(bird_of_prey_clean_poly$count, na.rm = TRUE) #2055
+```
+
+```{r}
+#frequency of birds killed per incident: 1-16
+#using rspb_ref
+incident_summary <- bird_of_prey_clean_poly %>%
+  group_by(rspb_ref) %>%
+  summarise(
+    birds_per_incident = sum(count),
+    rspb_ref=first(rspb_ref),
+    date_month_year = first(date_month_year),
+    date_year = first(date_year),
+    incident_type = first(incident_type),
+    grid10km = first(grid10km),
+    county = first(county),
+    County = first(County),
+    nuts1region = first(nuts1region),
+    bird_count_grid_total=first(bird_count_grid_total),
+    built_up_mean=first(built_up_mean),
+    built_up_class=first(built_up_class),
+    built_up_log=first(built_up_log),
+    upland_prop=first(upland_prop),
+    upland_binary=first(upland_binary),
+    geometry = first(geometry),
+    .groups = "drop"#remove the grouping and return a normal data frame
+  )
+incident_summary #1810 incidents (rows) x 15
+incident_summary %>%
+  count(birds_per_incident, name = "frequency") #+15,16: 1
+ggplot(incident_summary,
+       aes(x = factor(birds_per_incident))) +
+  geom_bar(fill = "steelblue") +
+  geom_text(
+    stat = "count",
+    aes(label = after_stat(count)),
+    vjust = -0.3,
+    family = "serif",
+    fontface = "bold"
+  ) +
+  scale_y_log10() +
+  labs(
+    x = "Birds killed per incident",
+    y = "Number of incidents"
+  ) +
+  theme_classic()+
+  theme(
+    axis.title = element_text(
+      family = "serif",
+      face = "bold"
+    ),
+    axis.text = element_text(
+      family = "serif"
+    ))
+
+grid_max_incident_summary <- incident_summary %>%
+  group_by(grid10km) %>%
+  summarise(
+    max_incident_size = max(birds_per_incident),
+    geometry = first(geometry),
+    .groups = "drop"
+  )
+ggplot(grid_max_incident_summary) +
+  geom_sf(
+    aes(fill = max_incident_size),
+    colour = NA
+  ) +
+  scale_fill_gradientn(
+    colours = c("lightblue", "purple", "darkblue"),
+    name = "Largest incident per grid square\n(number of birdstaken in one incident - rspb ref)"
+  ) +
+  theme_classic()
+```
+
+```{r}
+#number of years covered: 2007-2024
+#number of species:
+n_distinct(bird_of_prey_clean_poly$species) #17
+unique(bird_of_prey_clean_poly$species) #[1] "Buzzard"                          "Peregrine Falcon"                 "Other (Unspecified Bird of Prey)"
+ #[4] "Red Kite"                         "Sparrowhawk"                      "Goshawk"                         
+# [7] "Owls"                             "Marsh Harrier"                    "Osprey"                          
+#[10] "Kestrel"                          "Hobby"                            "Hen Harrier"                     
+#[13] "Raven"                            "Golden Eagle"                     "White-tailed Eagle"              
+#[16] "Merlin"                           "Falcons (unspecified)"   
+#number of incident types:
+n_distinct(bird_of_prey_clean_poly$incident_type) #5
+unique(bird_of_prey_clean_poly$incident_type) #"Shooting"            "Poisoning"           "Trapping"            "Persecution (Other)" "Nest Destruction"   
+```
+
+```{r}
+#incidents per year:
+#birds per year:
+#birds per month: (might be a lot of zeros)
+#seasonality - does it tie into grouse season, rearing and chicks?  year graph
+```
+
+```{r}
+#most persecuted species: buzzard
+#is this the same across all regions or is there spacial variation?
+#species composition throught time
+```
+
+```{r}
+#how incident type method changes over time - shooting, trapping, poisoning, other
+```
+
+```{r}
+#birds by country
+#birds by NUTS1 region
+#Scotland vs England trends
+```
+
+#### Temporal Modelling
+
+```{r}
+#statistical models
+#National temporal trend
+#hovmoller
+```
+
+#### Intervention Analysis
+
+```{r}
+#Did X policy alter the trajectory?
+#possible policies: Hen Harrier Action Plan (), Scottish Vicarious Liability (2012), General License restrictions (2018/19?), Werritty Review! [which led to heather burning licensing], Wildlife Management and Muirburn Act 
+```
+
+#### recreate spatiotemporal from *Computational Social Science: Assignment 1*
+
+```{r}
+#hovmoller plot
+#exploratory space-time visualisation
+#Create a table of total birds per region per year.
+hovmoller_data <- bird_of_prey_clean_poly %>%
+ # filter(date_year >= 2007,
+#         date_year <= 2024) %>%
+  group_by(nuts1region, date_year) %>%
+  summarise(
+    birds = sum(count, na.rm = TRUE),
+    .groups = "drop"
+  )
+head(hovmoller_data)
+hovmoller_data %>% #gaps atleast in london, north east,north west (comeplete: 18)
+  group_by(nuts1region) %>%
+  summarise(
+    n_years = n_distinct(date_year),
+    .groups = "drop"
+  )
+
+hovmoller_data <- hovmoller_data %>% #fill in blanks with 0, if any
+  complete(
+    nuts1region,
+    date_year = seq(
+      as.Date("2007-01-01"),
+      as.Date("2024-01-01"),
+      by = "year"
+    ),
+    fill = list(birds = 0)
+  )##all =18 complete
+
+# Create UK total yearly trend
+uk_total <- bird_of_prey_clean_poly %>%
+  group_by(date_year) %>%
+  summarise(
+    birds = sum(count, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    nuts1region = "UK Total"
+  )
+
+# Add UK row to regional data
+hovmoller_data <- bind_rows(
+  uk_total,
+  hovmoller_data
+)
+###
+# Order regions by total bird count (UK Total first)
+region_order <- hovmoller_data %>%
+  group_by(nuts1region) %>%
+  summarise(total = sum(birds), .groups = "drop") %>%
+  arrange(desc(total)) %>%
+  pull(nuts1region)
+
+# Ensure UK Total is first
+region_order <- c(
+  "UK Total",
+  setdiff(region_order, "UK Total")
+)
+
+hovmoller_data <- hovmoller_data %>%
+  mutate(
+    nuts1region = factor(nuts1region,
+                         levels = rev(region_order))#UK total at top
+  )
+```
+
+```{r}
+#figure 4
+ggplot(hovmoller_data,
+       aes(x = date_year,
+           y = nuts1region,
+           fill = birds)) +
+  geom_tile() +
+ # scale_fill_viridis_c(option = "C") +
+  scale_fill_viridis_c(
+  option = "C",
+  trans = "log1p",
+  breaks = c(0, 1, 2, 5, 10, 20, 50, 100, 150),
+  labels = c(0, 1, 2, 5, 10, 20, 50, 100, 150)#legend still displays the actual bird counts
+)+
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y"
+  ) +
+  labs(
+    x = "Year",
+    y = "NUTS1 Region",
+    fill = "Birds killed"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 90,
+      hjust = 1,
+      family = "serif",
+      face = "bold"
+    ),
+    axis.text.y = element_text(
+      family = "serif",
+      face = "bold"
+    ),
+    axis.title = element_text(
+      family = "serif",
+      face = "bold"
+    ),
+    panel.grid = element_blank()
+  )
+```
+
+```{r}
+#view(
+hovmoller_data %>%
+#  filter(nuts1region != "UK Total") %>%
+  group_by(date_year) %>%
+  summarise(
+    mean = mean(birds),
+    median = median(birds),
+    sd = sd(birds),
+    min = min(birds),
+    q1 = quantile(birds, 0.25),
+    q3 = quantile(birds, 0.75),
+    max = max(birds),
+    total = sum(birds),
+    .groups = "drop"
+  )
+#)
+```
+
+```{r}
+#view(hovmoller_data)
+# Create clean Hovmöller interpretation table for cht
+hovmoller_values <- hovmoller_data %>%
+  st_drop_geometry() %>%   # remove spatial geometry column
+  mutate(
+    year = format(date_year, "%Y")
+  ) %>%
+  dplyr::select(
+    nuts1region,
+    year,
+    birds
+  ) %>%
+  pivot_wider(
+    names_from = year,
+    values_from = birds,
+    values_fill = 0
+  ) %>%
+  arrange(nuts1region)
+
+#view(hovmoller_values)
+```
+
+#### recreate time and intervention from *Computational Social Science: Assignment 2*
+
+see dissertation_code_3
+
+```{r}
+getwd()
+saveRDS(
+  bird_of_prey_clean_poly,
+  "../data/bird_of_prey_clean_poly_0730.rds"
+)
+```
+
+### END of dissertation_code_2
